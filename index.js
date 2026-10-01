@@ -4,8 +4,7 @@ const session = require("express-session");
 const Database = require("better-sqlite3");
 const {
   Client, GatewayIntentBits, REST, Routes,
-  SlashCommandBuilder,
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
   ModalBuilder, TextInputBuilder, TextInputStyle
 } = require("discord.js");
