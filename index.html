@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OTP Shop Admin</title>
+<style>
+body{font-family:system-ui;margin:0;background:#0b1020;color:#eef2ff}main{max-width:1000px;margin:auto;padding:28px}
+.card{background:#151c33;border:1px solid #293252;border-radius:16px;padding:20px;margin:14px 0}
+input,button{padding:11px;border-radius:10px;border:1px solid #394568;margin:5px;background:#0d1428;color:white}
+button{cursor:pointer;background:#5267ff;border:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+small{color:#aeb8d5}.ok{color:#7ee2a8}.bad{color:#ff899f}
+</style></head><body><main>
+<h1>OTP Shop • Admin</h1><p><small>Kelola katalog dan cek koneksi provider.</small></p>
+<div class="card"><h3>Login Admin</h3><input id="pw" type="password" placeholder="Admin password"><button onclick="login()">Login</button><span id="loginmsg"></span></div>
+<div id="panel" style="display:none">
+<div class="card"><h3>Provider</h3><button onclick="health()">Tes koneksi API</button><pre id="health"></pre></div>
+<div class="card"><h3>Tambah Produk</h3><div class="grid">
+<input id="name" placeholder="Nama produk"><input id="country" placeholder="Country code, contoh ID">
+<input id="service" placeholder="Service, contoh WhatsApp"><input id="price" type="number" placeholder="Harga">
+</div><button onclick="add()">Tambah</button></div>
+<div class="card"><h3>Katalog</h3><div id="products"></div></div>
+</div>
+<script>
+async function login(){let r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw.value})});let j=await r.json();loginmsg.textContent=j.ok?' Login berhasil':' '+(j.error||'Gagal');if(j.ok){panel.style.display='block';load()}}
+async function load(){let r=await fetch('/api/admin/products');let p=await r.json();products.innerHTML=p.map(x=>`<div style="padding:10px;border-bottom:1px solid #293252">#${x.id} <b>${x.name}</b> — ${x.country}/${x.service} — ${Number(x.price).toLocaleString('id-ID')} IDR — ${x.enabled?'aktif':'nonaktif'}</div>`).join('')}
+async function add(){await fetch('/api/admin/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value,country:country.value,service:service.value,price:Number(price.value)})});load()}
+async function health(){let r=await fetch('/api/admin/health');let j=await r.json();health.textContent=JSON.stringify(j,null,2)}
+</script></main></body></html>
