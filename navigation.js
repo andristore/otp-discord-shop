@@ -6,6 +6,10 @@ function withHome(payload) {
     const data = typeof row.toJSON === 'function' ? row.toJSON() : row;
     return {...data, components: (data.components || []).map(component => ({...component}))};
   });
+  const ids = new Set(rows.flatMap(row => row.components.map(component => component.custom_id)));
+  if (['shop_products', 'shop_balance', 'shop_orders', 'shop_topup', 'shop_help'].every(id => ids.has(id))) {
+    return {...result, components: rows.map(row => ({...row, components: row.components.filter(component => component.custom_id !== HOME_ID)})).filter(row => row.components.length)};
+  }
   if (rows.some(row => row.components.some(component => component.custom_id === HOME_ID))) return result;
   const button = {type: 2, style: 2, custom_id: HOME_ID, label: 'Menu Awal', emoji: {name: '🏠'}};
   const available = [...rows].reverse().find(row => row.components.length < 5 && row.components.every(component => component.type === 2));
