@@ -48,7 +48,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
   const amount=value=>`${Number(value || 0).toLocaleString('id-ID')} IDR`;
   function menu(title,description,choices) {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(title).setDescription(description)],components:[
-      new ActionRowBuilder().addComponents(...choices.map(([id,label])=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(ButtonStyle.Primary))),
+      ...Array.from({length:Math.ceil(choices.length/5)},(_,r)=>new ActionRowBuilder().addComponents(...choices.slice(r*5,r*5+5).map(([id,label])=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(ButtonStyle.Primary)))),
       new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_home').setLabel('Kembali').setStyle(ButtonStyle.Secondary))
     ]};
   }
@@ -56,9 +56,9 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
     if(id==='admin_catalog_menu')return menu('📦 Katalog','Pilih katalog atau periksa koneksi provider.',[
       ['provider_catalog','Katalog Provider'],['admin_products:0','Produk Manual'],['admin_add','Tambah Produk'],['admin_health','Koneksi & Saldo Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
     if(id==='admin_balance_menu')return menu('💰 Saldo Pembeli','Tambahkan saldo setelah memeriksa pembayaran pembeli.',[
-      ['admin_balances:0','Daftar Saldo Pembeli'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo Pembeli'],['admin_balance_history','Riwayat Saldo Manual']]);
+      ['admin_balances:0','Daftar Saldo Pembeli'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo Pembeli'],['admin_balance_history','Riwayat Saldo Manual'],['admin_store_requests:0','Pengajuan Manual']]);
     if(id==='admin_transactions_menu')return menu('🧾 Transaksi','Lihat riwayat pembayaran dan transaksi yang perlu diperiksa.',[
-      ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_payment_issues','Pembayaran Perlu Diperiksa'],['admin_ops_manual','Pengaturan Pembayaran Manual'],['admin_staff_access','Izin & Admin']]);
+      ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_payment_issues','Pembayaran Perlu Diperiksa'],['admin_ops_manual','Pengaturan Pembayaran Manual'],['admin_staff_access','Izin & Admin'],['admin_store_tools','Laporan & Operasional']]);
   }
   function buyerBalances(requested=0) {
     const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();

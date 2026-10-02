@@ -109,9 +109,11 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
       const admins=(adminIds?adminIds():(env.ADMIN_DISCORD_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s))).slice(0,5);
       const instructions=String(manualInstructions?manualInstructions():env.MANUAL_TOPUP_INSTRUCTIONS || '').trim().slice(0,1100);
       await i.reply({ephemeral:true,allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💵 Isi Saldo Manual')
-        .setDescription(`Minimal isi saldo **5.000 IDR**.\n\n1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nSaldo manual masuk setelah disetujui admin. Tekan Saldo untuk mengecek hasilnya.`)],components:[new ActionRowBuilder().addComponents(
+        .setDescription(`Minimal isi saldo **5.000 IDR**.\n\n1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nUpload gambar bukti pembayaran ke Discord, salin tautan gambarnya, lalu tekan Ajukan Bukti Pembayaran. Admin memeriksa mutasi sebelum menyetujui. Tekan Status Pengajuan untuk melihat hasilnya.`)],components:[new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('shop_balance').setLabel('Cek Saldo').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId('shop_topup').setLabel('Kembali').setStyle(ButtonStyle.Secondary))]});return true;
+          new ButtonBuilder().setCustomId('shop_topup').setLabel('Kembali').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('manual_request').setLabel('Ajukan Bukti Pembayaran').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('manual_request_list:0').setLabel('Status Pengajuan').setStyle(ButtonStyle.Secondary))]});return true;
     }
     if(!payments.configured) {await i.reply({ephemeral:true,content:'QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran. Anda tetap bisa memakai Isi Saldo → Manual.'});return true;}
     if(id==='topup_qris') {

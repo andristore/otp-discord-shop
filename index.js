@@ -21,6 +21,7 @@ const {createOperations,createOperationsHandler}=require("./operations");
 const {createServerAccess,createServerAccessHandler}=require("./server-access");
 const {createStaff,createStaffHandler}=require("./staff");
 const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
+const {createStoreFeatures,createStoreFeatureHandler,REFUND_GUIDE}=require("./store-features");
 const app = express();
 const databasePath = process.env.DB_PATH || (process.env.RAILWAY_VOLUME_MOUNT_PATH
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "shop.db")
@@ -63,11 +64,13 @@ if (db.prepare("SELECT COUNT(*) c FROM products").get().c === 0) {
 }
 
 const pricing=createPricing(db);
-const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel});
+let storeFeatures;
+const assertStoreOpen=()=>storeFeatures?.assertOpen();
+const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
 app.use(express.json({verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
 let direct;
 const payments=createPayments({db,onSettled:payment=>direct.fulfill(payment)});
-direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel});
+direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
 payments.mount(app);
 const directPoll=setInterval(()=>direct.poll().catch(console.error),30000);
 directPoll.unref();
@@ -259,6 +262,7 @@ app.post("/api/discord/balance",admin, (req,res)=>{
 const client = new Client({intents:[GatewayIntentBits.Guilds]});
 const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
 const staff=createStaff({db});configureAdminAccess(staff);
+storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM});
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
   sendDM:sendDiscordDM,staff});
@@ -310,6 +314,7 @@ async function startDiscord(){
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments});
+  const handleStoreFeatures=createStoreFeatureHandler({discord:require("discord.js"),features:storeFeatures,staff});
   direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(withHome(handleDirect.status(row)));});
   client.on("interactionCreate", async i=>{
     try {
@@ -318,6 +323,10 @@ async function startDiscord(){
       addHomeNavigation(i);
       if(i.isButton() && i.customId===HOME_ID){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:[mainRow()]});
+      }
+      if(await handleStoreFeatures(i))return;
+      if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:)/.test(String(i.customId || ''))){
+        return i.reply({ephemeral:true,content:'🔧 Toko sedang maintenance. Pembelian baru dihentikan sementara. Pesanan, OTP, dan tagihan sebelumnya tetap tersedia.'});
       }
       if(await handleStaff(i))return;
       if(await handleServerAccess(i))return;
@@ -353,17 +362,18 @@ async function startDiscord(){
                 "4. Nomor akan diberikan\n" +
                 "5. OTP dikirim melalui DM saat masuk; **Cek OTP** tetap tersedia\n\n" +
                 "Jika order gagal, hubungi admin toko."
-              )]
+              )],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_refund_guide').setLabel('Panduan Refund').setStyle(ButtonStyle.Secondary))]
           });
         }
 
         if(i.customId==="shop_orders"){
-          const rows=db.prepare(`SELECT o.provider_order_id,o.phone,o.status,o.amount,o.created_at,
+          const rows=db.prepare(`SELECT o.id,o.product_name,o.provider_order_id,o.phone,o.status,o.amount,o.created_at,
             p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id
             WHERE o.discord_id=? ORDER BY o.id DESC LIMIT 10`).all(id);
           if(!rows.length) return i.reply({ephemeral:true,content:"Anda belum memiliki pesanan."});
-          const desc=rows.map(o=>`**#${o.provider_order_id}** • ${o.name||"OTP"}\n📱 ${o.phone||"-"} • ${o.status} • ${money(o.amount)}`).join("\n\n");
-          return i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("📦 Pesanan Saya").setDescription(desc)]});
+          const desc=rows.map(o=>`**#${o.provider_order_id}** • ${o.product_name||o.name||"OTP"}\n📱 ${o.phone||"-"} • ${o.status} • ${money(o.amount)}`).join("\n\n");
+          const repeatRows=[];for(let n=0;n<rows.length;n+=5)repeatRows.push(new ActionRowBuilder().addComponents(...rows.slice(n,n+5).map(o=>new ButtonBuilder().setCustomId('buy_again:'+o.id).setLabel(('Beli Lagi • '+o.provider_order_id).slice(0,80)).setStyle(ButtonStyle.Secondary))));
+          return i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("📦 Pesanan Saya").setDescription(desc)],components:repeatRows});
         }
 
         if(i.customId.startsWith("confirm_buy:")){
@@ -420,10 +430,11 @@ async function startDiscord(){
         }
       }
 
-      if((i.isButton() && i.customId.startsWith("pick_product:")) || (i.isStringSelectMenu() && i.customId==="buy_product")){
+      if((i.isButton() && (i.customId.startsWith("pick_product:") || i.customId.startsWith('buy_again:'))) || (i.isStringSelectMenu() && i.customId==="buy_product")){
         await i.deferReply({ephemeral:true});
-        const pid=Number(i.isButton()?i.customId.split(":")[1]:i.values[0]);
-        const parts=i.isButton()?i.customId.split(':'):[];
+        const repeat=i.customId?.startsWith('buy_again:')?storeFeatures.repeat(i.customId.split(':')[1],id):null;
+        const pid=Number(repeat?repeat.productId:i.isButton()?i.customId.split(":")[1]:i.values[0]);
+        const parts=repeat?(repeat.platformId && repeat.countryId?['pick_product',String(pid),String(repeat.platformId),String(repeat.countryId),repeat.operatorId==null?'any':String(repeat.operatorId)]:[]):i.isButton()?i.customId.split(':'):[];
         const filters=parts.length>=4?{platform_id:parts[2],country_id:parts[3]}:{};
         if(parts[4] && parts[4]!=='any')filters.operator_id=parts[4];
         const data=await smsCatalogProducts(filters);
@@ -435,7 +446,8 @@ async function startDiscord(){
         const confirm=new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`confirm_buy:${quote.token}`).setLabel("Bayar Pakai Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`qris_buy:${quote.token}`).setLabel("Bayar Langsung QRIS").setEmoji("💳").setStyle(ButtonStyle.Primary).setDisabled(price<1000),
-          new ButtonBuilder().setCustomId("shop_products").setLabel("Kembali").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId("shop_products").setLabel("Kembali").setEmoji("↩️").setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('shop_refund_guide').setLabel('Panduan Refund').setStyle(ButtonStyle.Secondary)
         );
         return i.editReply({
           embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("🧾 Konfirmasi Pembelian")
@@ -445,7 +457,7 @@ async function startDiscord(){
               {name:"Saldo",value:`**${money(balance)}**`,inline:true},
               {name:"Stok",value:`**${p.available}**`,inline:true}
             )
-            .setDescription("Pastikan produk dan harga sudah benar sebelum melanjutkan.")],
+            .setDescription("Pastikan produk dan harga terbaru sudah benar sebelum melanjutkan.\n\nRefund harga produk masuk ke saldo bot, termasuk pembayaran QRIS. Biaya QRIS tidak ikut dikembalikan. Pesanan yang sudah menerima OTP tidak dapat dibatalkan. Tekan Panduan Refund untuk detail.")],
           components:[confirm]
         });
       }
@@ -462,6 +474,7 @@ async function startDiscord(){
   const otpPoll=setInterval(()=>operations.pollOTP().catch(console.error),15000);otpPoll.unref();
   const lowPoll=setInterval(()=>operations.pollLow().catch(console.error),60000);lowPoll.unref();
   operations.pollOTP().catch(console.error);operations.pollLow().catch(console.error);
+  const manualPoll=setInterval(()=>storeFeatures.poll().catch(console.error),30000);manualPoll.unref();storeFeatures.poll().catch(console.error);
 }
 startDiscord();
 

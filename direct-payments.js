@@ -1,5 +1,5 @@
 const {randomUUID}=require('node:crypto');
-function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel}) {
+function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen=()=>{}}) {
   db.exec(`CREATE TABLE IF NOT EXISTS direct_purchases (
     invoice_id TEXT PRIMARY KEY,quote_token TEXT UNIQUE NOT NULL,discord_id TEXT NOT NULL,
     product_id INTEGER NOT NULL,platform_id TEXT,country_id TEXT,name TEXT NOT NULL,
@@ -57,6 +57,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     const updated=get(row.invoice_id,row.discord_id);await notify(updated);return updated;
   }
   async function create(userId,token,customer={}) {
+    assertOpen();
     if(!payments.configured)throw new Error('QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran.');
     const previous=db.prepare('SELECT * FROM direct_purchases WHERE quote_token=? AND discord_id=?').get(token,userId);
     if(previous)return {purchase:previous,payment:payments.get(previous.invoice_id,userId)};

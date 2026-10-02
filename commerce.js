@@ -1,8 +1,9 @@
 const {randomUUID}=require('node:crypto');
-function createCommerce({db,pricing,smsCreateOrder,smsCancel}) {
+function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{}}) {
   const columns=db.prepare('PRAGMA table_info(orders)').all().map(c=>c.name);
   if(!columns.includes('provider_amount'))db.exec('ALTER TABLE orders ADD COLUMN provider_amount INTEGER');
   if(!columns.includes('refunded'))db.exec('ALTER TABLE orders ADD COLUMN refunded INTEGER NOT NULL DEFAULT 0');
+  for(const name of ['platform_id','country_id','operator_id','product_name'])if(!columns.includes(name))db.exec(`ALTER TABLE orders ADD COLUMN ${name} TEXT`);
   const checkouts=new Map();const locks=new Set();const cancelLocks=new Set();
   function quote(userId,product) {
     for(const [key,c] of checkouts)if(c.expires<Date.now())checkouts.delete(key);
@@ -12,6 +13,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel}) {
     return {token,amount,providerAmount};
   }
   async function buy(userId,token) {
+    assertOpen();
     const q=checkouts.get(token);
     if(!q || q.userId!==userId || q.expires<Date.now())throw new Error('Konfirmasi kedaluwarsa. Pilih produk kembali.');
     if(locks.has(userId))throw new Error('Pembelian sedang diproses. Tunggu hasilnya.');
@@ -30,6 +32,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel}) {
         if(!debit.changes)throw new Error('Saldo tidak cukup.');
         db.prepare('INSERT INTO orders(discord_id,product_id,provider_order_id,phone,amount,provider_amount,status) VALUES(?,?,?,?,?,?,?)')
           .run(userId,q.productId,String(order.id),order.phone_number,q.amount,providerAmount,order.status || 'ACTIVE');
+        db.prepare('UPDATE orders SET platform_id=?,country_id=?,operator_id=?,product_name=? WHERE provider_order_id=? AND discord_id=?').run(q.platformId==null?null:String(q.platformId),q.countryId==null?null:String(q.countryId),q.operatorId==null?null:String(q.operatorId),q.name,String(order.id),userId);
       })();
       saved=true;return {order,amount:q.amount};
     } catch(error) {
