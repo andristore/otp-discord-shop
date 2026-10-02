@@ -108,6 +108,7 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
         if(orderId && (db.prepare('SELECT id FROM orders WHERE provider_order_id=?').get(orderId) || db.prepare('SELECT invoice_id FROM direct_purchases WHERE provider_order_id=? AND invoice_id<>?').get(orderId,invoiceId)))throw new Error('Order sudah terhubung ke transaksi lain.');
         if(action==='attach') {
           db.prepare('INSERT INTO orders(discord_id,product_id,provider_order_id,phone,otp,amount,provider_amount,status) VALUES(?,?,?,?,?,?,?,?)').run(row.discord_id,row.product_id,orderId,order.phone_number,order.otp_code || null,row.amount,row.provider_amount,order.status);
+          if(row.voucher_code)db.prepare('UPDATE orders SET voucher_code=?,discount_amount=?,original_amount=? WHERE provider_order_id=?').run(row.voucher_code,row.discount_amount,row.original_amount,orderId);
         } else {
           const before=db.prepare('SELECT balance FROM users WHERE discord_id=?').get(row.discord_id)?.balance || 0;
           if(!Number.isSafeInteger(before+row.amount))throw new Error('Saldo melebihi batas penyimpanan.');

@@ -29,7 +29,7 @@ function createMidtrans({db,fetchImpl=fetch,env=process.env,onSettled,assertCanC
     const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='midtrans'").get(s.order_id);if(!p)throw new Error('Tagihan tidak ditemukan.');
     const settled=validateMidtransStatus(p,s),qr=qrUrl(s);
     db.prepare('UPDATE topups SET provider_ref=?,channel=\'qris\',total_charge=?,fee_customer=0,qr_url=COALESCE(?,qr_url) WHERE order_id=?').run(s.transaction_id,p.amount,qr,p.order_id);
-    if(!p.credited){db.prepare('UPDATE topups SET status=? WHERE order_id=?').run(s.transaction_status,p.order_id);if(settled){const changed=db.prepare('UPDATE topups SET credited=1 WHERE order_id=? AND credited=0').run(p.order_id);if(changed.changes && p.purpose==='topup')db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(p.discord_id,p.amount);}}
+    if(!p.credited){db.prepare('UPDATE topups SET status=? WHERE order_id=?').run(s.transaction_status,p.order_id);if(settled){const changed=db.prepare('UPDATE topups SET credited=1,paid_at=COALESCE(paid_at,CURRENT_TIMESTAMP) WHERE order_id=? AND credited=0').run(p.order_id);if(changed.changes && p.purpose==='topup')db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(p.discord_id,p.amount);}}
     return db.prepare('SELECT * FROM topups WHERE order_id=?').get(p.order_id);
   });
   async function refresh(id,userId){const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='midtrans'").get(id);if(!p || (userId && p.discord_id!==userId))throw new Error('Tagihan tidak ditemukan.');

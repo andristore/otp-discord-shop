@@ -34,7 +34,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
   if(!['QRIS','QRISC','QRIS2','QRIS_SHOPEEPAY'].includes(channel))throw new Error('TRIPAY_QRIS_CHANNEL tidak didukung. Gunakan kode channel QRIS aktif di akun TriPay.');
   db.exec(`CREATE TABLE IF NOT EXISTS topups(order_id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
   const columns=new Set(db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name));
-  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
+  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
   async function request(path,body,live=production) {
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
     const base=live?'https://tripay.co.id/api':'https://tripay.co.id/api-sandbox';
@@ -51,7 +51,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     db.prepare('UPDATE topups SET provider_ref=?,total_charge=?,fee_customer=?,fee_merchant=?,qr_url=COALESCE(?,qr_url) WHERE order_id=?').run(status.reference,Number(status.amount),Number(status.fee_customer),Number(status.fee_merchant),qrUrl(status.qr_url),p.order_id);
     if(!p.credited){
       db.prepare('UPDATE topups SET status=? WHERE order_id=?').run(normalize(status.status),p.order_id);
-      if(settled){const changed=db.prepare('UPDATE topups SET credited=1 WHERE order_id=? AND credited=0').run(p.order_id);
+      if(settled){const changed=db.prepare('UPDATE topups SET credited=1,paid_at=COALESCE(paid_at,CURRENT_TIMESTAMP) WHERE order_id=? AND credited=0').run(p.order_id);
         if(changed.changes && p.purpose==='topup')db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(p.discord_id,p.amount);
       }
     }

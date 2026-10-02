@@ -8,6 +8,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
   if(!db.prepare('PRAGMA table_info(direct_purchases)').all().some(c=>c.name==='operator_id'))db.exec('ALTER TABLE direct_purchases ADD COLUMN operator_id INTEGER');
+  for(const [name,type] of Object.entries({voucher_code:"TEXT",discount_amount:"INTEGER NOT NULL DEFAULT 0",original_amount:"INTEGER"}))if(!db.prepare("PRAGMA table_info(direct_purchases)").all().some(c=>c.name===name))db.exec(`ALTER TABLE direct_purchases ADD COLUMN ${name} ${type}`);
   // A provider request interrupted by a restart must be reconciled by admin, never sent twice.
   db.prepare("UPDATE direct_purchases SET state='review',error='Proses provider terputus saat restart; periksa order SMSCode sebelum menyelesaikan tagihan.' WHERE state='processing'").run();
   let notifier;const notifying=new Set();
@@ -47,6 +48,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
         } else {
           db.transaction(()=>{
             db.prepare('INSERT INTO orders(discord_id,product_id,provider_order_id,phone,amount,provider_amount,status) VALUES(?,?,?,?,?,?,?)').run(row.discord_id,row.product_id,String(order.id),order.phone_number,row.amount,cost,order.status || 'ACTIVE');
+            db.prepare('UPDATE orders SET voucher_code=?,discount_amount=?,original_amount=?,platform_id=?,country_id=?,operator_id=?,product_name=? WHERE provider_order_id=? AND discord_id=?').run(row.voucher_code || null,row.discount_amount || 0,row.original_amount ?? row.amount,row.platform_id,row.country_id,row.operator_id,row.name,String(order.id),row.discord_id);
             db.prepare("UPDATE direct_purchases SET state='fulfilled',error=NULL WHERE invoice_id=? AND state='processing'").run(row.invoice_id);
           })();
         }
@@ -66,8 +68,12 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     require('./payments').parseCustomerEmail(customer.email);
     if(q.amount<1000 || q.amount>1000000)throw new Error('Harga produk di luar batas QRIS 1.000–1.000.000 IDR. Gunakan saldo bot untuk harga di bawah 1.000 IDR.');
     const invoiceId='maboyy-buy-'+randomUUID();
+    db.transaction(()=>{
+    commerce.claimCoupon?.(userId,q,'invoice:'+invoiceId,invoiceId);
     db.prepare('INSERT INTO direct_purchases(invoice_id,quote_token,discord_id,product_id,platform_id,country_id,name,provider_amount,amount,operator_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
       .run(invoiceId,token,userId,q.productId,String(q.platformId),String(q.countryId),q.name,q.providerAmount,q.amount,q.operatorId ?? null);
+    db.prepare('UPDATE direct_purchases SET voucher_code=?,discount_amount=?,original_amount=? WHERE invoice_id=?').run(q.coupon || null,q.discount || 0,q.originalAmount ?? q.amount,invoiceId);
+    })();
     commerce.checkout(userId,token,true);
     try {const payment=await payments.create(userId,q.amount,{...customer,purpose:'purchase',orderId:invoiceId});return {purchase:get(invoiceId,userId),payment};}
     catch {throw new Error('Tagihan '+invoiceId+' belum menampilkan QR. Hubungi admin untuk memeriksa Riwayat QRIS Beli sebelum membuat tagihan lain.');}

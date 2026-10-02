@@ -47,7 +47,7 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
         if(r.rows.length)components.push(row(r.rows.map(f=>['favorite_detail:'+f.id,f.name])));components.push(nav('favorites:',r,'shop_products'));
         await i.editReply({content:`**⭐ Favorit Saya**\n${r.count} favorit • halaman ${r.page+1}/${r.pages}\n${r.count?'Pilih favorit untuk membeli atau menghapusnya.':'Simpan favorit dari halaman Konfirmasi Pembelian.'}`,components});
       }else if(id.startsWith('favorite_detail:')){
-        const f=model.favorite(user,id.split(':')[1]);await i.editReply({content:`⭐ **${f.name}**\nNegara ID: ${f.country} • operator: ${f.operator==='any'?'Any':f.operator}\nBuka untuk melihat harga dan stok terbaru.`,components:[row([['favorite_open:'+f.id,'Lihat Harga & Stok'],['favorite_delete:'+f.id,'Hapus Favorit'],['favorites','Kembali']])]});
+        const f=model.favorite(user,id.split(':')[1]);await i.editReply({content:`⭐ **${f.name}**\nNegara ID: ${f.country} • operator: ${f.operator==='any'?'Any':f.operator}\nBuka untuk melihat harga dan stok terbaru.`,components:[row([['favorite_open:'+f.id,'Lihat Harga & Stok'],['favorite_delete:'+f.id,'Hapus Favorit'],['favorites','Kembali'],['tool_stock:'+f.id,'Notifikasi Stok On/Off']])]});
       }else if(id==='shop_orders'){
         const r=model.activeOrders(user);await i.editReply({content:`**📦 Pesanan Saya**\n${r.count} pesanan aktif.`,components:[row([['active_orders:0','Pesanan Aktif'],['shop_order_history','Riwayat Pesanan']])]});
       }else if(id.startsWith('active_orders:')){

@@ -21,6 +21,7 @@ const {createOperations,createOperationsHandler}=require("./operations");
 const {createServerAccess,createServerAccessHandler}=require("./server-access");
 const {createStaff,createStaffHandler}=require("./staff");
 const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
+const {createShopTools,createShopToolsHandler}=require("./shop-tools");
 const {createEfficiency,createEfficiencyHandler}=require("./efficiency");
 const {createStoreFeatures,createStoreFeatureHandler,REFUND_GUIDE}=require("./store-features");
 const app = express();
@@ -312,8 +313,11 @@ async function startDiscord(){
   }
 
   const efficiency=createEfficiency({db,staff});
+  const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
+  commerce.setCoupons(toolkit.coupons);
+  const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
-  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id)});
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id),audit:toolkit.audit});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:()=>staff.ids()});
@@ -332,9 +336,10 @@ async function startDiscord(){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:[mainRow()]});
       }
       if(await handleStoreFeatures(i))return;
-      if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:)/.test(String(i.customId || ''))){
+      if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:|tool_coupon)/.test(String(i.customId || ''))){
         return i.reply({ephemeral:true,content:'🔧 Toko sedang maintenance. Pembelian baru dihentikan sementara. Pesanan, OTP, dan tagihan sebelumnya tetap tersedia.'});
       }
+      if(await handleTools(i))return;
       if(await handleEfficiency(i))return;
       if(await handleStaff(i))return;
       if(await handleServerAccess(i))return;
@@ -370,7 +375,7 @@ async function startDiscord(){
                 "4. Nomor akan diberikan\n" +
                 "5. OTP dikirim melalui DM saat masuk; **Cek OTP** tetap tersedia\n\n" +
                 "Jika order gagal, hubungi admin toko."
-              )],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_refund_guide').setLabel('Panduan Refund').setStyle(ButtonStyle.Secondary))]
+              )],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_refund_guide').setLabel('Panduan Refund').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('tool_ticket_new').setLabel('Buat Tiket Bantuan').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('tool_tickets:0').setLabel('Tiket Saya').setStyle(ButtonStyle.Primary))]
           });
         }
 
@@ -466,7 +471,7 @@ async function startDiscord(){
               {name:"Stok",value:`**${p.available}**`,inline:true}
             )
             .setDescription("Pastikan produk dan harga terbaru sudah benar sebelum melanjutkan.\n\nRefund harga produk masuk ke saldo bot, termasuk pembayaran QRIS. Biaya QRIS tidak ikut dikembalikan. Pesanan yang sudah menerima OTP tidak dapat dibatalkan. Tekan Panduan Refund untuk detail.")],
-          components:[confirm,new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('favorite_save:'+quote.token).setLabel('Simpan Favorit').setStyle(ButtonStyle.Secondary))]
+          components:[confirm,new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('favorite_save:'+quote.token).setLabel('Simpan Favorit').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('tool_coupon:'+quote.token).setLabel('Gunakan Voucher').setStyle(ButtonStyle.Primary))]
         });
       }
     } catch(e){
@@ -482,6 +487,10 @@ async function startDiscord(){
   const otpPoll=setInterval(()=>operations.pollOTP().catch(console.error),15000);otpPoll.unref();
   const lowPoll=setInterval(()=>operations.pollLow().catch(console.error),60000);lowPoll.unref();
   operations.pollOTP().catch(console.error);operations.pollLow().catch(console.error);
+  const pendingPoll=setInterval(()=>toolkit.reconcile().catch(console.error),30000);pendingPoll.unref();toolkit.reconcile().catch(console.error);
+  const ticketPoll=setInterval(()=>toolkit.notifyTickets().catch(console.error),30000);ticketPoll.unref();toolkit.notifyTickets().catch(console.error);
+  const stockPoll=setInterval(()=>toolkit.stock().catch(console.error),60000);stockPoll.unref();toolkit.stock().catch(console.error);
+  const backupPoll=setInterval(()=>toolkit.backup().catch(console.error),3600000);backupPoll.unref();toolkit.backup().catch(console.error);
   const manualPoll=setInterval(()=>storeFeatures.poll().catch(console.error),30000);manualPoll.unref();storeFeatures.poll().catch(console.error);
 }
 startDiscord();

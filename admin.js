@@ -41,7 +41,7 @@ function createManualBalance(db) {
   });
 }
 
-function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
+function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>{}}) {
   let creditBalance;
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
@@ -53,12 +53,16 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
     ]};
   }
   function section(id) {
-    if(id==='admin_catalog_menu')return menu('📦 Katalog','Pilih katalog atau periksa koneksi provider.',[
-      ['provider_catalog','Katalog Provider'],['admin_products:0','Produk Manual'],['admin_add','Tambah Produk'],['admin_health','Koneksi & Saldo Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
-    if(id==='admin_balance_menu')return menu('💰 Saldo Pembeli','Tambahkan saldo setelah memeriksa pembayaran pembeli.',[
-      ['admin_balances:0','Daftar Saldo Pembeli'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo Pembeli'],['admin_balance_history','Riwayat Saldo Manual'],['admin_store_requests:0','Pengajuan Manual']]);
-    if(id==='admin_transactions_menu')return menu('🧾 Transaksi','Lihat riwayat pembayaran dan transaksi yang perlu diperiksa.',[
-      ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_payment_issues','Pembayaran Perlu Diperiksa'],['admin_ops_manual','Pengaturan Pembayaran Manual'],['admin_staff_access','Izin & Admin'],['admin_store_tools','Laporan & Operasional']]);
+    if(id==='admin_catalog_menu')return menu('🏪 Toko','Katalog, harga jual, dan promo.',[
+      ['provider_catalog','Katalog Provider'],['admin_products:0','Produk Manual'],['admin_add','Tambah Produk'],['admin_pricing','Harga Jual'],['admin_tools_coupons:0','Voucher']]);
+    if(id==='admin_balance_menu')return menu('👥 Pembeli','Akun, saldo, dan bantuan pembeli.',[
+      ['admin_balances:0','Daftar Saldo'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo'],['admin_balance_history','Riwayat Saldo Manual'],['admin_tools_tickets:0','Tiket Bantuan']]);
+    if(id==='admin_transactions_menu')return menu('💳 Pembayaran','Verifikasi pembayaran dan pengajuan.',[
+      ['admin_store_requests:0','Pengajuan Manual'],['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']]);
+    if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
+      ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fee','Catat Biaya Gateway']]);
+    if(id==='admin_system_menu')return menu('🛠️ Sistem','Akses, backup, dan pemantauan toko.',[
+      ['admin_staff_access','Izin & Admin'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Koneksi Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
   }
   function buyerBalances(requested=0) {
     const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();
@@ -78,10 +82,11 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
       .setDescription('Pilih kategori untuk mengelola Hi, OTP Sms Virtual.')],components:[
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('admin_catalog_menu').setLabel('Katalog').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('admin_pricing').setLabel('Harga Jual').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Saldo Pembeli').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('admin_transactions_menu').setLabel('Transaksi').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('admin_catalog_menu').setLabel('Toko').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Pembeli').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_transactions_menu').setLabel('Pembayaran').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_reports_menu').setLabel('Laporan').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Sistem').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('admin_eff_summary').setLabel('Ringkasan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary)
@@ -139,7 +144,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(buyerBalances(Number(i.customId.split(':')[1])));return true;
       }
-      if(['admin_catalog_menu','admin_balance_menu','admin_transactions_menu'].includes(i.customId)) {
+      if(['admin_catalog_menu','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu'].includes(i.customId)) {
         await i.update(section(i.customId));return true;
       }
       if(i.customId==='admin_topup_history' || i.customId==='admin_direct_history') {
@@ -221,6 +226,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
     if(i.isModalSubmit() && i.customId==='admin_pricing_save') {
       try {
         const settings=pricing.set(i.fields.getTextInputValue('percent'),i.fields.getTextInputValue('fee'));
+        audit(i.user.id,'Ubah harga jual: '+settings.basisPoints/100+'% + '+settings.fee+' IDR');
         await i.reply({ephemeral:true,content:`✅ Harga jual semua layanan: harga provider + ${settings.basisPoints/100}% + ${amount(settings.fee)}. Pecahan dibulatkan ke atas. Contoh provider 5.000 IDR → jual ${amount(pricing.price(5000))}.`,components:home().components});
       }catch(e){await i.reply({ephemeral:true,content:e.message});}
       return true;
@@ -237,6 +243,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
           .run(p.name,p.country,p.service,p.price,p.enabled,i.customId.split(':')[1]);
         if(!result.changes) { await i.reply({ephemeral:true,content:'Produk lokal tidak ditemukan.'}); return true; }
       }
+      audit(i.user.id,'Simpan produk lokal '+p.name+' ('+p.price+' IDR)');
       await i.reply({ephemeral:true,content:'✅ Produk lokal tersimpan.',components:home().components});
       return true;
     }
