@@ -24,7 +24,7 @@ function flowOptions(stage, state, catalog) {
   throw new Error('Tahap pembelian tidak valid.');
 }
 
-function createPurchaseFlow({discord,smscode,smsCatalogProducts}) {
+function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle}=discord;
   const titles={app:'1. Pilih Aplikasi',country:'2. Pilih Negara',operator:'3. Pilih Operator',product:'4. Pilih Harga & Stok'};
   const next={app:'country',country:'operator',operator:'product'};
@@ -42,11 +42,16 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts}) {
     return `${prefix}:${stage}:${state.app || '-'}:${state.country || '-'}:${state.operator || '-'}:${page}`;
   }
   async function catalog(stage,state) {
-    const [services,countries,result]=await Promise.all([
-      list('/catalog/services'),list('/catalog/countries'),smsCatalogProducts()
+    // First screen needs only application names, not the full product inventory.
+    if(stage==='app') return {services:await list('/catalog/services'),countries:[],products:[],operators:[]};
+    const filters={platform_id:state.app};
+    if(state.country && stage!=='country')filters.country_id=state.country;
+    const [countries,result,operators]=await Promise.all([
+      stage==='country'?list('/catalog/countries'):Promise.resolve([]),
+      smsCatalogProducts(filters),
+      ['operator','product'].includes(stage)?list(`/catalog/operators?country_id=${encodeURIComponent(state.country)}&platform_id=${encodeURIComponent(state.app)}`):Promise.resolve([])
     ]);
-    const operators=['operator','product'].includes(stage)?await list(`/catalog/operators?country_id=${encodeURIComponent(state.country)}&platform_id=${encodeURIComponent(state.app)}`):[];
-    return {services,countries,products:result.data,operators};
+    return {services:[],countries,products:pricing?result.data.map(p=>({...p,price:pricing.price(p.price?.canonical_amount ?? p.price)})):result.data,operators};
   }
   function render(stage,state,options,requested=0) {
     const pages=Math.max(1,Math.ceil(options.length/20));
@@ -55,7 +60,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts}) {
     const visible=options.slice(page*20,(page+1)*20);
     for(let offset=0;offset<visible.length;offset+=5) {
       components.push(new ActionRowBuilder().addComponents(...visible.slice(offset,offset+5).map(o=>
-        new ButtonBuilder().setCustomId(stage==='product'?`pick_product:${o.value}`:`${key('flow_pick',stage,state,page)}:${o.value}`)
+        new ButtonBuilder().setCustomId(stage==='product'?`pick_product:${o.value}:${state.app}:${state.country}`:`${key('flow_pick',stage,state,page)}:${o.value}`)
           .setLabel(String(stage==='product'?o.description:o.label).slice(0,80))
           .setStyle(ButtonStyle.Secondary)
           .setDisabled(stage==='product' && o.description.includes('Tidak tersedia'))

@@ -12,6 +12,8 @@ const {
 const {createAdminHandler}=require("./admin");
 const {createPurchaseFlow}=require("./purchase-flow");
 const {createPayments,createPaymentHandler}=require("./payments");
+const {createPricing}=require("./pricing");
+const {createCommerce}=require("./commerce");
 const app = express();
 const db = new Database("shop.db");
 db.pragma("journal_mode = WAL");
@@ -49,6 +51,8 @@ if (db.prepare("SELECT COUNT(*) c FROM products").get().c === 0) {
   add.run("Indonesia • SMS", "ID", "SMS", 4000);
 }
 
+const pricing=createPricing(db);
+const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel});
 app.use(express.json());
 const payments=createPayments({db});
 payments.mount(app);
@@ -85,17 +89,20 @@ async function smscode(path, options={}) {
 function uuidKey(){ return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 
 const CATALOG_CACHE_MS = 60_000;
-let catalogCache = null;
-let catalogLoading = null;
+const catalogCache = new Map();
+const catalogLoading = new Map();
 
-async function smsCatalogProducts(){
-  if(catalogCache && Date.now() < catalogCache.expiresAt) return catalogCache.result;
-  if(catalogLoading) return catalogLoading;
-  catalogLoading = (async()=>{
+async function smsCatalogProducts(filters={}){
+  const query=['platform_id','country_id'].filter(key=>filters[key]!=null)
+    .map(key=>`${key}=${encodeURIComponent(filters[key])}`).join('&');
+  const cached=catalogCache.get(query);
+  if(cached && Date.now() < cached.expiresAt) return cached.result;
+  if(catalogLoading.has(query)) return catalogLoading.get(query);
+  const loading = (async()=>{
     const products = new Map();
     const limit = 1000;
     for(let page=1; ; page++){
-      const result = await smscode(`/catalog/products?limit=${limit}&page=${page}&sort=name_asc`);
+      const result = await smscode(`/catalog/products?limit=${limit}&page=${page}&sort=name_asc${query?"&"+query:""}`);
       if(!Array.isArray(result.data)) throw new Error("Format katalog SMSCode tidak valid.");
       const rows = result.data;
       if(!rows.length) break;
@@ -109,11 +116,13 @@ async function smsCatalogProducts(){
       if(rows.length < pageLimit) break;
     }
     const result = {data: [...products.values()]};
-    catalogCache = {result, expiresAt: Date.now() + CATALOG_CACHE_MS};
+    for(const [key,entry] of catalogCache) if(entry.expiresAt<=Date.now())catalogCache.delete(key);
+    catalogCache.set(query,{result, expiresAt: Date.now() + CATALOG_CACHE_MS});
     return result;
   })();
-  try { return await catalogLoading; }
-  finally { catalogLoading = null; }
+  catalogLoading.set(query,loading);
+  try { return await loading; }
+  finally { catalogLoading.delete(query); }
 }
 
 function catalogPage(products, requestedPage=0){
@@ -153,7 +162,7 @@ async function smsFinish(orderId){
 app.get("/api/products",async(req,res)=>{
   try {
     const data=await smsCatalogProducts();
-    const rows=data.data;
+    const rows=data.data.map(p=>({...p,price:pricing.price(p.price?.canonical_amount ?? p.price)}));
     res.json(rows);
   } catch(e) {
     res.status(502).json({error:e.message});
@@ -193,30 +202,20 @@ app.get("/api/admin/health",admin,async(req,res)=>{
   } catch(e){ res.json({ok:true,provider:"SMSCode",connected:false,error:e.message}); }
 });
 
-app.post("/api/order", async(req,res)=>{
+app.post("/api/order",admin,async(req,res)=>{
   const {discordId,productId}=req.body;
-  if(!discordId||!productId) return res.status(400).json({error:"discordId dan productId wajib"});
-  db.prepare("INSERT INTO users(discord_id,balance) VALUES(?,0) ON CONFLICT(discord_id) DO NOTHING").run(discordId);
-  const user=db.prepare("SELECT * FROM users WHERE discord_id=?").get(discordId);
+  if(!discordId||!productId)return res.status(400).json({error:"discordId dan productId wajib"});
   try {
-    const data=await smsCreateOrder(productId);
-    const order=data.data?.orders?.[0];
-    if(!order) throw new Error("SMSCode tidak mengembalikan order");
-    const amount=order.amount?.canonical_amount ?? order.amount ?? 0;
-    if(user.balance < amount) {
-      await smsCancel(order.id).catch(()=>{});
-      return res.status(400).json({error:"Saldo toko tidak cukup"});
-    }
-    db.transaction(()=>{
-      db.prepare("UPDATE users SET balance=balance-? WHERE discord_id=?").run(amount,discordId);
-      db.prepare("INSERT INTO orders(discord_id,product_id,provider_order_id,phone,amount) VALUES(?,?,?,?,?)")
-        .run(discordId,productId,String(order.id),order.phone_number,amount);
-    })();
+    const catalog=await smsCatalogProducts();
+    const p=catalog.data.find(p=>Number(p.id)===Number(productId));
+    if(!p || !productAvailable(p))return res.status(400).json({error:"Produk tidak tersedia"});
+    const q=commerce.quote(String(discordId),p);
+    const {order,amount}=await commerce.buy(String(discordId),q.token);
     res.json({ok:true,orderId:order.id,phone:order.phone_number,amount,status:order.status});
-  } catch(e) { res.status(502).json({error:e.message}); }
+  }catch(e){res.status(502).json({error:e.message});}
 });
 
-app.get("/api/order/:id", async(req,res)=>{
+app.get("/api/order/:id",admin, async(req,res)=>{
   const order=db.prepare("SELECT * FROM orders WHERE provider_order_id=?").get(req.params.id);
   if(!order) return res.status(404).json({error:"Order tidak ditemukan"});
   try {
@@ -228,19 +227,14 @@ app.get("/api/order/:id", async(req,res)=>{
   } catch(e){res.status(502).json({error:e.message});}
 });
 
-app.post("/api/order/:id/cancel", async(req,res)=>{
+app.post("/api/order/:id/cancel",admin,async(req,res)=>{
   const order=db.prepare("SELECT * FROM orders WHERE provider_order_id=?").get(req.params.id);
-  if(!order) return res.status(404).json({error:"Order tidak ditemukan"});
-  try {
-    const result=await smsCancel(req.params.id);
-    const refund=result.data?.refund_amount?.canonical_amount ?? result.data?.refund_amount ?? order.amount;
-    db.prepare("UPDATE orders SET status='CANCELED' WHERE id=?").run(order.id);
-    db.prepare("UPDATE users SET balance=balance+? WHERE discord_id=?").run(refund,order.discord_id);
-    res.json({ok:true,status:"CANCELED",refund});
-  } catch(e){res.status(502).json({error:e.message});}
+  if(!order)return res.status(404).json({error:"Order tidak ditemukan"});
+  try {const refund=await commerce.cancel(req.params.id,order.discord_id);res.json({ok:true,status:"CANCELED",refund});}
+  catch(e){res.status(502).json({error:e.message});}
 });
 
-app.post("/api/discord/balance", (req,res)=>{
+app.post("/api/discord/balance",admin, (req,res)=>{
   const id=String(req.body.discordId||"");
   if(!id) return res.status(400).json({error:"discordId wajib"});
   db.prepare("INSERT INTO users(discord_id,balance) VALUES(?,0) ON CONFLICT(discord_id) DO NOTHING").run(id);
@@ -268,8 +262,8 @@ async function startDiscord(){
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
       .setDescription(
-        "Selamat datang di OTP Maboyy.\\n\\n" +
-        "Pilih menu di bawah untuk mulai bertransaksi.\\n" +
+        "Selamat datang di OTP Maboyy.\n\n" +
+        "Pilih menu di bawah untuk mulai bertransaksi.\n" +
         "🔒 Transaksi diproses otomatis melalui provider."
       )
       .addFields({name:"💰 Saldo Anda",value:`**${money(balance)}**`,inline:true})
@@ -286,8 +280,8 @@ async function startDiscord(){
     );
   }
 
-  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode});
-  const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts});
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing});
+  const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments});
   client.on("interactionCreate", async i=>{
     try {
@@ -306,7 +300,7 @@ async function startDiscord(){
           const balance=await getBalance(id);
           return i.reply({
             ephemeral:true,
-            embeds:[new EmbedBuilder().setColor(0x57F287).setTitle("💰 Saldo Anda").setDescription(`Saldo saat ini:\\n\\n# **${money(balance)}**`)]
+            embeds:[new EmbedBuilder().setColor(0x57F287).setTitle("💰 Saldo Anda").setDescription(`Saldo saat ini:\n\n# **${money(balance)}**`)]
           });
         }
 
@@ -315,12 +309,12 @@ async function startDiscord(){
             ephemeral:true,
             embeds:[new EmbedBuilder().setColor(0xFEE75C).setTitle("❓ Bantuan")
               .setDescription(
-                "**Cara membeli OTP**\\n" +
-                "1. Klik **Beli OTP**\\n" +
-                "2. Pilih aplikasi, negara, operator, dan harga\\n" +
-                "3. Konfirmasi pembelian\\n" +
-                "4. Nomor akan diberikan\\n" +
-                "5. Klik **Cek OTP** untuk mengambil kode\\n\\n" +
+                "**Cara membeli OTP**\n" +
+                "1. Klik **Beli OTP**\n" +
+                "2. Pilih aplikasi, negara, operator, dan harga\n" +
+                "3. Konfirmasi pembelian\n" +
+                "4. Nomor akan diberikan\n" +
+                "5. Klik **Cek OTP** untuk mengambil kode\n\n" +
                 "Jika order gagal, hubungi admin toko."
               )]
           });
@@ -331,28 +325,15 @@ async function startDiscord(){
             p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id
             WHERE o.discord_id=? ORDER BY o.id DESC LIMIT 10`).all(id);
           if(!rows.length) return i.reply({ephemeral:true,content:"Anda belum memiliki pesanan."});
-          const desc=rows.map(o=>`**#${o.provider_order_id}** • ${o.name||"OTP"}\\n📱 ${o.phone||"-"} • ${o.status} • ${money(o.amount)}`).join("\\n\\n");
+          const desc=rows.map(o=>`**#${o.provider_order_id}** • ${o.name||"OTP"}\n📱 ${o.phone||"-"} • ${o.status} • ${money(o.amount)}`).join("\n\n");
           return i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("📦 Pesanan Saya").setDescription(desc)]});
         }
 
         if(i.customId.startsWith("confirm_buy:")){
-          const pid=Number(i.customId.split(":")[1]);
+          const token=i.customId.split(":")[1];
           await i.deferReply({ephemeral:true});
           try{
-            const data=await smsCreateOrder(pid);
-            const order=data.data?.orders?.[0];
-            if(!order) throw new Error("Provider tidak mengembalikan order.");
-            const amount=order.amount?.canonical_amount ?? order.amount ?? 0;
-            const balance=await getBalance(id);
-            if(balance<amount){
-              await smsCancel(order.id).catch(()=>{});
-              return i.editReply(`❌ Saldo tidak cukup. Harga **${money(amount)}**, saldo Anda **${money(balance)}**.`);
-            }
-            db.transaction(()=>{
-              db.prepare("UPDATE users SET balance=balance-? WHERE discord_id=?").run(amount,id);
-              db.prepare("INSERT INTO orders(discord_id,product_id,provider_order_id,phone,amount) VALUES(?,?,?,?,?)")
-                .run(id,pid,String(order.id),order.phone_number,amount);
-            })();
+            const {order,amount}=await commerce.buy(id,token);
             const buttons=new ActionRowBuilder().addComponents(
               new ButtonBuilder().setCustomId(`check_otp:${order.id}`).setLabel("Cek OTP").setEmoji("🔢").setStyle(ButtonStyle.Success),
               new ButtonBuilder().setCustomId(`cancel_order:${order.id}`).setLabel("Batalkan").setEmoji("❌").setStyle(ButtonStyle.Danger)
@@ -386,7 +367,7 @@ async function startDiscord(){
                 .setDescription("Gunakan kode tersebut pada layanan yang Anda beli.") ]});
             }
             return i.editReply({embeds:[new EmbedBuilder().setColor(0xFEE75C).setTitle("⏳ OTP Belum Masuk")
-              .setDescription(`Status: **${d.status}**\\nNomor: **${d.phone_number||order.phone}**\\n\\nTekan **Cek OTP** lagi beberapa saat kemudian.`)]});
+              .setDescription(`Status: **${d.status}**\nNomor: **${d.phone_number||order.phone}**\n\nTekan **Cek OTP** lagi beberapa saat kemudian.`)]});
           }catch(e){return i.editReply("❌ Gagal mengecek OTP: "+e.message);}
         }
 
@@ -396,12 +377,7 @@ async function startDiscord(){
           if(!order) return i.reply({ephemeral:true,content:"Order tidak ditemukan."});
           await i.deferReply({ephemeral:true});
           try{
-            const result=await smsCancel(poid);
-            const refund=result.data?.refund_amount?.canonical_amount ?? result.data?.refund_amount ?? order.amount;
-            db.transaction(()=>{
-              db.prepare("UPDATE orders SET status='CANCELED' WHERE id=?").run(order.id);
-              db.prepare("UPDATE users SET balance=balance+? WHERE discord_id=?").run(refund,id);
-            })();
+            const refund=await commerce.cancel(poid,id);
             return i.editReply(`✅ Order dibatalkan. **${money(refund)}** dikembalikan ke saldo.`);
           }catch(e){return i.editReply("❌ Tidak dapat membatalkan order: "+e.message);}
         }
@@ -410,13 +386,15 @@ async function startDiscord(){
       if((i.isButton() && i.customId.startsWith("pick_product:")) || (i.isStringSelectMenu() && i.customId==="buy_product")){
         await i.deferReply({ephemeral:true});
         const pid=Number(i.isButton()?i.customId.split(":")[1]:i.values[0]);
-        const data=await smsCatalogProducts();
+        const parts=i.isButton()?i.customId.split(':'):[];
+        const data=await smsCatalogProducts(parts.length>=4?{platform_id:parts[2],country_id:parts[3]}:{});
         const p=(data.data||[]).find(x=>Number(x.id)===pid);
         if(!p || !productAvailable(p)) return i.editReply({content:"Produk sedang tidak tersedia. Pilih layanan lain dari katalog."});
-        const price=p.price?.canonical_amount ?? p.price ?? 0;
+        const quote=commerce.quote(id,p);
+        const price=quote.amount;
         const balance=await getBalance(id);
         const confirm=new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`confirm_buy:${pid}`).setLabel("Konfirmasi Beli").setEmoji("✅").setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`confirm_buy:${quote.token}`).setLabel("Konfirmasi Beli").setEmoji("✅").setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId("shop_products").setLabel("Kembali").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
         );
         return i.editReply({

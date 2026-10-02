@@ -15,17 +15,18 @@ function parseProduct(fields) {
   return {name,country,service,price,enabled:Number(active)};
 }
 
-function createAdminHandler({discord, db, smscode}) {
+function createAdminHandler({discord, db, smscode,pricing}) {
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const amount=value=>`${Number(value || 0).toLocaleString('id-ID')} IDR`;
   function home() {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
-      .setDescription('Kelola katalog lokal toko dan periksa koneksi SMSCode. Menu Beli OTP membaca katalog provider secara langsung; perubahan katalog lokal tidak mengubah harga atau stok SMSCode.')],components:[
+      .setDescription('Atur persentase keuntungan dan harga jual melalui Atur Harga Jual. Harga dasar dan stok provider mengikuti SMSCode. Katalog lokal dikelola terpisah.')],components:[
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('admin_products:0').setLabel('Katalog Lokal').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_add').setLabel('Tambah Produk').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('admin_health').setLabel('Koneksi & Saldo Provider').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary)
       )]};
   }
@@ -78,7 +79,15 @@ function createAdminHandler({discord, db, smscode}) {
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(i.isButton()) {
-      if(i.customId.startsWith('admin_edit:')) {
+      if(i.customId==='admin_pricing') {
+        const settings=pricing.get();
+        await i.showModal(new ModalBuilder().setCustomId('admin_pricing_save').setTitle('Atur Harga Jual Semua Layanan')
+          .addComponents(
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('percent').setLabel('Markup (%) dari harga provider').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(settings.basisPoints/100)).setMaxLength(7)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('fee').setLabel('Tambahan tetap IDR (0 jika tidak ada)').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(settings.fee)).setMaxLength(7))
+          ));
+      }
+      else if(i.customId.startsWith('admin_edit:')) {
         const p=db.prepare('SELECT * FROM products WHERE id=?').get(i.customId.split(':')[1]);
         if(!p) await i.reply({ephemeral:true,content:'Produk lokal tidak ditemukan.'});
         else await i.showModal(productModal(p));
@@ -104,6 +113,13 @@ function createAdminHandler({discord, db, smscode}) {
       const p=db.prepare('SELECT * FROM products WHERE id=?').get(i.values[0]);
       if(!p) await i.reply({ephemeral:true,content:'Produk lokal tidak ditemukan.'});
       else await i.showModal(productModal(p));
+      return true;
+    }
+    if(i.isModalSubmit() && i.customId==='admin_pricing_save') {
+      try {
+        const settings=pricing.set(i.fields.getTextInputValue('percent'),i.fields.getTextInputValue('fee'));
+        await i.reply({ephemeral:true,content:`✅ Harga jual semua layanan: harga provider + ${settings.basisPoints/100}% + ${amount(settings.fee)}. Pecahan dibulatkan ke atas. Contoh provider 5.000 IDR → jual ${amount(pricing.price(5000))}.`,components:home().components});
+      }catch(e){await i.reply({ephemeral:true,content:e.message});}
       return true;
     }
     if(i.isModalSubmit() && (i.customId==='admin_create' || i.customId.startsWith('admin_save:'))) {
