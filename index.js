@@ -2,6 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const session = require("express-session");
 const Database = require("better-sqlite3");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
   Client, GatewayIntentBits, REST, Routes,
   SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -18,8 +20,13 @@ const {createDirectPayments,createDirectHandler}=require("./direct-payments");
 const {createOperations,createOperationsHandler}=require("./operations");
 const {createServerAccess,createServerAccessHandler}=require("./server-access");
 const {createStaff,createStaffHandler}=require("./staff");
+const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
 const app = express();
-const db = new Database("shop.db");
+const databasePath = process.env.DB_PATH || (process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "shop.db")
+  : "shop.db");
+fs.mkdirSync(path.dirname(path.resolve(databasePath)), {recursive: true});
+const db = new Database(databasePath);
 db.pragma("journal_mode = WAL");
 
 db.exec(`
@@ -303,11 +310,15 @@ async function startDiscord(){
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments});
-  direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(handleDirect.status(row));});
+  direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(withHome(handleDirect.status(row)));});
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
       if(await serverAccess.gate(i))return;
+      addHomeNavigation(i);
+      if(i.isButton() && i.customId===HOME_ID){
+        return i.reply({ephemeral:true,embeds:[shopEmbed()],components:[mainRow()]});
+      }
       if(await handleStaff(i))return;
       if(await handleServerAccess(i))return;
       if(await handleOperations(i)) return;
