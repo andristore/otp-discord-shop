@@ -8,9 +8,9 @@ function parseCustomerEmail(value) {
   if(email.length>254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw new Error('Masukkan alamat email yang valid untuk tagihan TriPay.');
   return email;
 }
-function parseTopup(value) {
+function parseTopup(value,minimum=5000) {
   const raw=String(value).trim();const amount=Number(raw);
-  if(!/^\d+$/.test(raw) || !Number.isSafeInteger(amount) || amount<1000 || amount>1000000)throw new Error('Nominal QRIS harus bilangan bulat 1.000–1.000.000 IDR.');
+  if(!/^\d+$/.test(raw) || !Number.isSafeInteger(amount) || amount<minimum || amount>1000000)throw new Error(`Nominal QRIS harus bilangan bulat ${minimum.toLocaleString('id-ID')}–1.000.000 IDR.`);
   return amount;
 }
 function validateStatus(payment,status) {
@@ -63,15 +63,16 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     const reference=p.provider_ref || callbackReference;
     if(!reference)throw new Error('Referensi TriPay belum diterima. Tunggu callback atau minta admin memeriksa merchant_ref '+p.order_id+'. Jangan membuat pembayaran ulang dulu.');
     const status=await request('/transaction/detail?reference='+encodeURIComponent(reference),undefined,Boolean(p.production));
-    const updated=apply(status);if(updated.credited && updated.purpose==='purchase')await onSettled(updated);return updated;
+    const updated=apply(status);if(updated.credited && updated.purpose==='purchase' && status.status==='PAID')await onSettled(updated);return {...updated,providerStatus:status.status};
   }
   async function create(userId,amount,options={}) {
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
-    amount=parseTopup(amount);const email=parseCustomerEmail(options.email);
-    const purpose=options.purpose==='purchase'?'purchase':'topup';const orderId=options.orderId || 'maboyy-'+randomUUID();
+    const purpose=options.purpose==='purchase'?'purchase':'topup';
+    amount=parseTopup(amount,purpose==='purchase'?1000:5000);const email=parseCustomerEmail(options.email);
+    const orderId=options.orderId || 'maboyy-'+randomUUID();
     db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production) VALUES(?,?,?,?,'tripay',?,?)").run(orderId,userId,amount,purpose,channel,production?1:0);
-    const status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli OTP Maboyy').slice(0,100),customer_email:email,
-      order_items:[{name:purpose==='purchase'?'Pembelian OTP Maboyy':'Isi Saldo OTP Maboyy',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
+    const status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli Hi, OTP Sms Virtual').slice(0,100),customer_email:email,
+      order_items:[{name:purpose==='purchase'?'Pembelian Hi, OTP Sms Virtual':'Isi Saldo Hi, OTP Sms Virtual',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
       signature:createHmac('sha256',privateKey).update(merchantCode+orderId+amount).digest('hex')});
     // Reuse the same strict checks for the charge response and subsequent detail responses.
     const p=apply(status);if(p.credited && p.purpose==='purchase')await onSettled(p);
@@ -92,31 +93,31 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
     recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5").all(userId)};
 }
-function createPaymentHandler({discord,payments,env=process.env}) {
+function createPaymentHandler({discord,payments,env=process.env,manualInstructions,adminIds}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const money=v=>Number(v).toLocaleString('id-ID')+' IDR';
   return async function handlePayment(i) {
     const id=String(i.customId || '');
     if(!['shop_topup','topup_qris','topup_manual','topup_amount','topup_history'].includes(id) && !id.startsWith('topup_check:'))return false;
     if(id==='shop_topup') {
-      await i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Isi Saldo • OTP Maboyy')
-        .setDescription('Pilih metode isi saldo:\n\n**QRIS Otomatis** — saldo masuk setelah pembayaran terverifikasi.\n**Manual** — hubungi admin dan kirim bukti pembayaran; saldo ditambahkan setelah diperiksa.')],components:[new ActionRowBuilder().addComponents(
+      await i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Isi Saldo • Hi, OTP Sms Virtual')
+        .setDescription('Minimal isi saldo **5.000 IDR**.\n\n**QRIS Otomatis** — saldo masuk setelah pembayaran terverifikasi.\n**Manual** — hubungi admin dan kirim bukti pembayaran; saldo ditambahkan setelah diperiksa.')],components:[new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('topup_qris').setLabel('QRIS Otomatis').setStyle(ButtonStyle.Primary).setDisabled(!payments.configured),
           new ButtonBuilder().setCustomId('topup_manual').setLabel('Manual').setStyle(ButtonStyle.Secondary))]});return true;
     }
     if(id==='topup_manual') {
-      const admins=(env.ADMIN_DISCORD_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s)).slice(0,5);
-      const instructions=(env.MANUAL_TOPUP_INSTRUCTIONS || '').trim().slice(0,1100);
+      const admins=(adminIds?adminIds():(env.ADMIN_DISCORD_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s))).slice(0,5);
+      const instructions=String(manualInstructions?manualInstructions():env.MANUAL_TOPUP_INSTRUCTIONS || '').trim().slice(0,1100);
       await i.reply({ephemeral:true,allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💵 Isi Saldo Manual')
-        .setDescription(`1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nSaldo manual masuk setelah disetujui admin. Tekan Saldo untuk mengecek hasilnya.`)],components:[new ActionRowBuilder().addComponents(
+        .setDescription(`Minimal isi saldo **5.000 IDR**.\n\n1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nSaldo manual masuk setelah disetujui admin. Tekan Saldo untuk mengecek hasilnya.`)],components:[new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('shop_balance').setLabel('Cek Saldo').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('shop_topup').setLabel('Kembali').setStyle(ButtonStyle.Secondary))]});return true;
     }
     if(!payments.configured) {await i.reply({ephemeral:true,content:'QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran. Anda tetap bisa memakai Isi Saldo → Manual.'});return true;}
     if(id==='topup_qris') {
-      await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo QRIS • OTP Maboyy')
+      await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo QRIS • Hi, OTP Sms Virtual')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount')
-          .setLabel('Nominal IDR (1.000–1.000.000)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7)),
+          .setLabel('Nominal IDR (5.000–1.000.000)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7)),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('email').setLabel('Email untuk tagihan TriPay').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(254))));
       return true;
     }
@@ -132,7 +133,7 @@ function createPaymentHandler({discord,payments,env=process.env}) {
         await i.editReply({content:p.credited?`✅ Pembayaran diterima. ${money(p.amount)} sudah masuk ke saldo Anda.`:`Status pembayaran: ${p.status}. Saldo ditambahkan setelah pembayaran terkonfirmasi.`});
       } else {
         const p=await payments.create(i.user.id,parseTopup(i.fields.getTextInputValue('amount')),{email:i.fields.getTextInputValue('email'),name:i.user.username});
-        await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 QRIS • OTP Maboyy')
+        await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 QRIS • Hi, OTP Sms Virtual')
           .setDescription(`Saldo masuk: **${money(p.amount)}**\nBiaya QRIS pembeli: **${money(p.fee_customer || 0)}**\nTotal bayar: **${money(p.total_charge)}**\n${payments.production?'Bayar dengan memindai QRIS.':'MODE UJI — gunakan simulator TriPay; bukan untuk pembayaran nyata.'}\nSaldo masuk otomatis setelah pembayaran dikonfirmasi.`)
           .setImage(p.qr_url).setFooter({text:p.order_id})],components:[new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('topup_check:'+p.order_id).setLabel('Cek Pembayaran').setStyle(ButtonStyle.Success))]});

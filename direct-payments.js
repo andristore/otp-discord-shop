@@ -124,9 +124,9 @@ function createDirectHandler({discord,direct,payments}) {
       }else {
         const {purchase,payment}=await direct.create(i.user.id,id.slice(13),{email:i.fields.getTextInputValue('email'),name:i.user.username});
         if(purchase.state!=='pending'){await i.editReply(status(purchase));return true;}
-        if(!payment?.qr_url)throw new Error('QR belum tersedia. Buka Riwayat QRIS Beli untuk mengecek tagihan.');
+        if(!payment?.qr_url)throw new Error('QR belum tersedia. Hubungi admin untuk memeriksa riwayat tagihan.');
         await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Bayar Langsung QRIS')
-          .setDescription(`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payments.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator TriPay, bukan uang nyata.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran atau Riwayat QRIS Beli.`)
+          .setDescription(`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payments.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator TriPay, bukan uang nyata.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran; OTP dikirim melalui DM saat masuk.`)
           .setImage(payment.qr_url).setFooter({text:purchase.invoice_id})],components:[checkRow(purchase.invoice_id)]});
       }
     }catch(e){await i.editReply({content:e.message});}

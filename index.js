@@ -9,12 +9,15 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle
 } = require("discord.js");
 
-const {createAdminHandler}=require("./admin");
+const {createAdminHandler,configureAdminAccess}=require("./admin");
 const {createPurchaseFlow}=require("./purchase-flow");
 const {createPayments,createPaymentHandler}=require("./payments");
 const {createPricing}=require("./pricing");
 const {createCommerce}=require("./commerce");
 const {createDirectPayments,createDirectHandler}=require("./direct-payments");
+const {createOperations,createOperationsHandler}=require("./operations");
+const {createServerAccess,createServerAccessHandler}=require("./server-access");
+const {createStaff,createStaffHandler}=require("./staff");
 const app = express();
 const db = new Database("shop.db");
 db.pragma("journal_mode = WAL");
@@ -247,6 +250,14 @@ app.post("/api/discord/balance",admin, (req,res)=>{
 });
 
 const client = new Client({intents:[GatewayIntentBits.Guilds]});
+const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
+const staff=createStaff({db});configureAdminAccess(staff);
+const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
+const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
+  sendDM:sendDiscordDM,staff});
+client.on('guildCreate',guild=>serverAccess.register(guild).catch(console.error));
+client.on('guildDelete',guild=>{if(!guild.unavailable)serverAccess.removed(guild.id);});
+client.once('clientReady',async()=>{for(const guild of client.guilds.cache.values())try{await serverAccess.register(guild);}catch(e){console.error(e);}});
 async function startDiscord(){
   if(!process.env.DISCORD_TOKEN) return console.log("DISCORD_TOKEN belum diisi; bot tidak dijalankan.");
   const commands=[
@@ -262,16 +273,16 @@ async function startDiscord(){
     return db.prepare("SELECT balance FROM users WHERE discord_id=?").get(id).balance;
   }
 
-  function shopEmbed(title="OTP Maboyy"){
+  function shopEmbed(title="Hi, OTP Sms Virtual"){
     return new EmbedBuilder()
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
       .setDescription(
-        "Selamat datang di OTP Maboyy.\n\n" +
+        "Selamat datang di Hi, OTP Sms Virtual.\n\n" +
         "Pilih menu di bawah untuk mulai bertransaksi.\n" +
         "🔒 Transaksi diproses otomatis melalui provider."
       )
-      .setFooter({text:"OTP Maboyy • Automated Service"});
+      .setFooter({text:"Hi, OTP Sms Virtual • Automated Service"});
   }
 
   function mainRow(){
@@ -287,12 +298,19 @@ async function startDiscord(){
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id)});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
-  const handlePayment=createPaymentHandler({discord:require("discord.js"),payments});
+  const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:()=>staff.ids()});
+  const handleStaff=createStaffHandler({discord:require("discord.js"),staff,resolveUser:id=>client.users.fetch(id)});
+  const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
+  const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments});
   direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(handleDirect.status(row));});
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
+      if(await serverAccess.gate(i))return;
+      if(await handleStaff(i))return;
+      if(await handleServerAccess(i))return;
+      if(await handleOperations(i)) return;
       if(await handleAdmin(i)) return;
       if(await handleProviderFlow(i)) return;
       if(await handlePayment(i)) return;
@@ -322,7 +340,7 @@ async function startDiscord(){
                 "2. Pilih aplikasi, negara, operator, dan harga\n" +
                 "3. Konfirmasi pembelian\n" +
                 "4. Nomor akan diberikan\n" +
-                "5. Klik **Cek OTP** untuk mengambil kode\n\n" +
+                "5. OTP dikirim melalui DM saat masuk; **Cek OTP** tetap tersedia\n\n" +
                 "Jika order gagal, hubungi admin toko."
               )]
           });
@@ -354,7 +372,7 @@ async function startDiscord(){
                   {name:"Harga",value:`**${money(amount)}**`,inline:true},
                   {name:"Status",value:`**${order.status}**`,inline:true}
                 )
-                .setDescription("Tunggu SMS masuk, lalu tekan **Cek OTP**.")],
+                .setDescription("OTP akan dikirim melalui DM saat masuk. Tombol **Cek OTP** tetap tersedia jika DM tidak diterima.")],
               components:[buttons]
             });
           }catch(e){return i.editReply("❌ Gagal membuat order: "+e.message);}
@@ -430,6 +448,9 @@ async function startDiscord(){
   });
 
   await client.login(process.env.DISCORD_TOKEN);
+  const otpPoll=setInterval(()=>operations.pollOTP().catch(console.error),15000);otpPoll.unref();
+  const lowPoll=setInterval(()=>operations.pollLow().catch(console.error),60000);lowPoll.unref();
+  operations.pollOTP().catch(console.error);operations.pollLow().catch(console.error);
 }
 startDiscord();
 

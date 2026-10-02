@@ -1,4 +1,7 @@
+let staffAccess;
+function configureAdminAccess(access) {staffAccess=access;}
 function isDiscordAdmin(id, configured=process.env.ADMIN_DISCORD_IDS || '') {
+  if(arguments.length<2 && staffAccess)return staffAccess.isAdmin(id);
   return configured.split(',').map(value=>value.trim()).filter(Boolean).includes(String(id));
 }
 
@@ -22,8 +25,8 @@ function createManualBalance(db) {
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
   return db.transaction(({interactionId,adminId,buyerId,amount,note})=>{
-    if(!interactionId || !/^\d{17,20}$/.test(buyerId) || !Number.isSafeInteger(amount) || amount<1 || amount>1000000 || !note.trim() || note.length>200) {
-      throw new Error('ID pembeli harus ID Discord pengguna. Nominal 1–1.000.000 rupiah dan catatan wajib diisi.');
+    if(!interactionId || !/^\d{17,20}$/.test(buyerId) || !Number.isSafeInteger(amount) || amount<5000 || amount>1000000 || !note.trim() || note.length>200) {
+      throw new Error('ID pembeli harus ID Discord pengguna. Nominal 5.000–1.000.000 rupiah dan catatan wajib diisi.');
     }
     const previous=db.prepare('SELECT * FROM manual_balance_credits WHERE interaction_id=?').get(interactionId);
     if(previous) {
@@ -51,15 +54,29 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
   }
   function section(id) {
     if(id==='admin_catalog_menu')return menu('📦 Katalog','Pilih katalog atau periksa koneksi provider.',[
-      ['provider_catalog','Katalog Provider'],['admin_products:0','Produk Manual'],['admin_add','Tambah Produk'],['admin_health','Koneksi & Saldo Provider']]);
+      ['provider_catalog','Katalog Provider'],['admin_products:0','Produk Manual'],['admin_add','Tambah Produk'],['admin_health','Koneksi & Saldo Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
     if(id==='admin_balance_menu')return menu('💰 Saldo Pembeli','Tambahkan saldo setelah memeriksa pembayaran pembeli.',[
-      ['admin_balance_add','Tambah Saldo Pembeli'],['admin_balance_history','Riwayat Saldo Manual']]);
+      ['admin_balances:0','Daftar Saldo Pembeli'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo Pembeli'],['admin_balance_history','Riwayat Saldo Manual']]);
     if(id==='admin_transactions_menu')return menu('🧾 Transaksi','Lihat riwayat pembayaran dan transaksi yang perlu diperiksa.',[
-      ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_payment_issues','Pembayaran Perlu Diperiksa']]);
+      ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_payment_issues','Pembayaran Perlu Diperiksa'],['admin_ops_manual','Pengaturan Pembayaran Manual'],['admin_staff_access','Izin & Admin']]);
+  }
+  function buyerBalances(requested=0) {
+    const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();
+    const pages=Math.max(1,Math.ceil(summary.count/10));
+    const page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1);
+    const rows=db.prepare('SELECT discord_id,balance FROM users ORDER BY balance DESC, discord_id ASC LIMIT 10 OFFSET ?').all(page*10);
+    return {content:'',allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💰 Daftar Saldo Pembeli')
+      .setDescription(`Total saldo akun: **${amount(summary.total)}**\n\n${rows.length?rows.map((r,n)=>`${page*10+n+1}. <@${r.discord_id}>\nID: ${r.discord_id}\nSaldo: **${amount(r.balance)}**`).join('\n\n'):'Belum ada akun pembeli tersimpan.'}`)
+      .setFooter({text:`Halaman ${page+1}/${pages} • ${summary.count} akun • Urutan saldo terbesar`})],components:[new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`admin_balances:${page-1}`).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
+        new ButtonBuilder().setCustomId(`admin_balances:${page+1}`).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1),
+        new ButtonBuilder().setCustomId(`admin_balances:${page}`).setLabel('Perbarui').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Kembali').setStyle(ButtonStyle.Secondary)
+      )]};
   }
   function home() {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
-      .setDescription('Pilih kategori untuk mengelola OTP Maboyy.')],components:[
+      .setDescription('Pilih kategori untuk mengelola Hi, OTP Sms Virtual.')],components:[
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('admin_catalog_menu').setLabel('Katalog').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_pricing').setLabel('Harga Jual').setStyle(ButtonStyle.Primary),
@@ -118,6 +135,9 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(i.isButton()) {
+      if(i.customId.startsWith('admin_balances:')) {
+        await i.update(buyerBalances(Number(i.customId.split(':')[1])));return true;
+      }
       if(['admin_catalog_menu','admin_balance_menu','admin_transactions_menu'].includes(i.customId)) {
         await i.update(section(i.customId));return true;
       }
@@ -130,7 +150,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
       }
       if(i.customId==='admin_balance_add') {
         const modal=new ModalBuilder().setCustomId('admin_balance_save').setTitle('Tambah Saldo Pembeli');
-        for(const [key,label,max] of [['buyer','ID Discord pengguna pembeli',20],['amount','Tambahkan rupiah (tanpa titik/koma)',7],['note','Catatan / referensi pembayaran',200]]) {
+        for(const [key,label,max] of [['buyer','ID Discord pengguna pembeli',20],['amount','Nominal rupiah (minimal 5000, tanpa titik)',7],['note','Catatan / referensi pembayaran',200]]) {
           modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(key).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(max)));
         }
         await i.showModal(modal);return true;
@@ -186,10 +206,11 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
         const buyerId=i.fields.getTextInputValue('buyer').trim();
         const raw=i.fields.getTextInputValue('amount').trim();
         const note=i.fields.getTextInputValue('note').trim();
-        if(!/^\d{17,20}$/.test(buyerId) || !/^\d+$/.test(raw) || Number(raw)<1 || Number(raw)>1000000 || !note || note.length>200) throw new Error('Isi ID Discord pengguna pembeli, nominal 1–1.000.000 tanpa titik/koma, dan catatan.');
+        if(!/^\d{17,20}$/.test(buyerId) || !/^\d+$/.test(raw) || Number(raw)<5000 || Number(raw)>1000000 || !note || note.length>200) throw new Error('Isi ID Discord pengguna pembeli, nominal 5.000–1.000.000 tanpa titik/koma, dan catatan.');
         let buyer;
         try {buyer=await resolveUser(buyerId);} catch {throw new Error('Pengguna Discord tidak dapat diperiksa. Periksa ID pembeli dan coba lagi.');}
         if(!buyer || buyer.bot) throw new Error('ID tersebut bukan pengguna pembeli. Gunakan ID akun pengguna, bukan bot/server/channel.');
+        if(!isDiscordAdmin(i.user.id))throw new Error('Akses admin sudah dicabut.');
         creditBalance ||= createManualBalance(db);
         const result=creditBalance({interactionId:i.id,adminId:i.user.id,buyerId,amount:Number(raw),note});
         await i.editReply({content:`✅ Saldo pembeli ${buyer.username} (${buyerId}) ditambah ${amount(result.amount)}.\nSaldo setelah transaksi: ${amount(result.balance_after)}\nCatatan: ${note}`,allowedMentions:{parse:[]}});
@@ -223,4 +244,4 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
   };
 }
 
-module.exports={isDiscordAdmin,parseProduct,createAdminHandler,createManualBalance};
+module.exports={isDiscordAdmin,configureAdminAccess,parseProduct,createAdminHandler,createManualBalance};
