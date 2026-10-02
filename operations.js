@@ -77,9 +77,9 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
     if(previous)return previous;
     let row=issue(invoiceId);
     if(!row || row.state!=='review')throw new Error('Tagihan bukan transaksi yang perlu diperiksa.');
-    // Refresh through authenticated TriPay detail before any refund or manual fulfillment.
+    // Refresh through authenticated gateway status before any refund or manual fulfillment.
     const paid=await payments.refresh(invoiceId,row.discord_id);
-    if(!paid?.credited || paid.providerStatus!=='PAID' || paid.purpose!=='purchase' || paid.status!=='settlement' || paid.amount!==row.amount)throw new Error('Pembayaran belum terverifikasi lunas.');
+    if(!paid?.credited || !['PAID','settlement'].includes(paid.providerStatus) || paid.purpose!=='purchase' || paid.status!=='settlement' || paid.amount!==row.amount)throw new Error('Pembayaran belum terverifikasi lunas.');
     if(staff && !staff.isAdmin(adminId))throw new Error('Akses admin sudah dicabut.');
     const claim=db.prepare("UPDATE direct_purchases SET state='resolving' WHERE invoice_id=? AND state='review'").run(invoiceId);
     if(!claim.changes)throw new Error('Transaksi sudah diselesaikan atau sedang diperiksa admin lain.');
@@ -171,7 +171,7 @@ function createOperationsHandler({discord,ops}) {
         await i.editReply({content:`**Pembayaran Perlu Diperiksa**\nHalaman ${r.page+1}/${r.pages} • ${r.count} transaksi\n${r.count?'Pilih transaksi untuk memeriksa dan menyelesaikan.':'Tidak ada transaksi bermasalah.'}`,components});
       } else if(id.startsWith('admin_ops_issue:')) {
         const r=ops.issue(id.split(':')[1]);if(!r)throw new Error('Tagihan tidak ditemukan.');
-        await i.editReply({content:`Tagihan: ${r.invoice_id}\nPembeli: ${r.discord_id}\nHarga jual: ${money(r.amount)}\nBiaya provider: ${money(r.provider_amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\nStatus: ${r.state}\n${r.error || ''}\n\nPeriksa pembayaran TriPay dan riwayat SMSCode. Hubungkan hanya order yang benar milik transaksi ini. Untuk refund tanpa ID order, pastikan di riwayat SMSCode tidak ada order berhasil/masih aktif. Refund hanya harga produk ke saldo bot; biaya QRIS tidak termasuk.`,allowedMentions:{parse:[]},components:r.state==='review'?[buttons([['admin_ops_attach:'+r.invoice_id,'Hubungkan Pesanan'],['admin_ops_refund:'+r.invoice_id,'Refund ke Saldo'],['admin_payment_issues','Kembali']])]:[buttons([['admin_payment_issues','Kembali']])]});
+        await i.editReply({content:`Tagihan: ${r.invoice_id}\nPembeli: ${r.discord_id}\nHarga jual: ${money(r.amount)}\nBiaya provider: ${money(r.provider_amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\nStatus: ${r.state}\n${r.error || ''}\n\nPeriksa pembayaran gateway dan riwayat SMSCode. Hubungkan hanya order yang benar milik transaksi ini. Untuk refund tanpa ID order, pastikan di riwayat SMSCode tidak ada order berhasil/masih aktif. Refund hanya harga produk ke saldo bot; biaya QRIS tidak termasuk.`,allowedMentions:{parse:[]},components:r.state==='review'?[buttons([['admin_ops_attach:'+r.invoice_id,'Hubungkan Pesanan'],['admin_ops_refund:'+r.invoice_id,'Refund ke Saldo'],['admin_payment_issues','Kembali']])]:[buttons([['admin_payment_issues','Kembali']])]});
       } else if(id.startsWith('admin_ops_resolve:')) {
         const [,action,invoiceId]=id.split(':');
         const r=await ops.resolve({invoiceId,action,adminId:i.user.id,orderId:i.fields.getTextInputValue('order').trim(),note:i.fields.getTextInputValue('note').trim(),confirmation:i.fields.getTextInputValue('confirm').trim()});

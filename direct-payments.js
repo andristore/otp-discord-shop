@@ -64,7 +64,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     payments.assertCanCreate?.(userId);
     const q=commerce.checkout(userId,token);
     require('./payments').parseCustomerEmail(customer.email);
-    if(q.amount<1000 || q.amount>1000000)throw new Error('Harga produk di luar batas QRIS TriPay 1.000–1.000.000 IDR. Gunakan saldo bot untuk harga di bawah 1.000 IDR.');
+    if(q.amount<1000 || q.amount>1000000)throw new Error('Harga produk di luar batas QRIS 1.000–1.000.000 IDR. Gunakan saldo bot untuk harga di bawah 1.000 IDR.');
     const invoiceId='maboyy-buy-'+randomUUID();
     db.prepare('INSERT INTO direct_purchases(invoice_id,quote_token,discord_id,product_id,platform_id,country_id,name,provider_amount,amount,operator_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
       .run(invoiceId,token,userId,q.productId,String(q.platformId),String(q.countryId),q.name,q.providerAmount,q.amount,q.operatorId ?? null);
@@ -78,9 +78,9 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
   }
   let polling=false;
   async function poll() {
-    if(polling || !payments.configured)return;polling=true;
+    if(polling || !(payments.canPoll ?? payments.configured))return;polling=true;
     try {
-      const rows=db.prepare("SELECT d.* FROM direct_purchases d JOIN topups t ON t.order_id=d.invoice_id WHERE d.state='pending' AND t.gateway='tripay' AND t.status IN ('creating','pending','settlement') ORDER BY COALESCE(d.polled_at,'') ASC LIMIT 5").all();
+      const rows=db.prepare("SELECT d.* FROM direct_purchases d JOIN topups t ON t.order_id=d.invoice_id WHERE d.state='pending' AND t.gateway IN ('tripay','midtrans') AND t.status IN ('creating','pending','settlement') ORDER BY COALESCE(d.polled_at,'') ASC LIMIT 5").all();
       for(const r of rows){db.prepare('UPDATE direct_purchases SET polled_at=CURRENT_TIMESTAMP WHERE invoice_id=?').run(r.invoice_id);try{await refresh(r.invoice_id,r.discord_id);}catch {}}
       for(const r of db.prepare("SELECT * FROM direct_purchases WHERE notified=0 AND state IN ('fulfilled','refunded','review') LIMIT 5").all())await notify(r);
     } finally {polling=false;}
@@ -108,9 +108,9 @@ function createDirectHandler({discord,direct,payments}) {
     if(!id.startsWith('qris_buy:') && !id.startsWith('direct_email:') && !id.startsWith('direct_check:') && id!=='direct_history')return false;
     if(id.startsWith('qris_buy:') && payments.active?.(i.user.id)){await i.reply({ephemeral:true,content:'Masih ada tagihan QRIS aktif. Lanjutkan tagihan sebelumnya.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Buka Tagihan Aktif').setStyle(ButtonStyle.Primary))]});return true;}
     if(id.startsWith('qris_buy:')) {
-      if(!payments.configured){await i.reply({ephemeral:true,content:'QRIS TriPay belum dikonfigurasi oleh admin.'});return true;}
+      if(!payments.configured){await i.reply({ephemeral:true,content:'QRIS belum dikonfigurasi oleh admin.'});return true;}
       await i.showModal(new ModalBuilder().setCustomId('direct_email:'+id.slice(9)).setTitle('Email Tagihan QRIS')
-        .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('email').setLabel('Alamat email untuk tagihan TriPay').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(254))));return true;
+        .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('email').setLabel('Alamat email untuk tagihan QRIS').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(254))));return true;
     }
     await i.deferReply({ephemeral:true});
     try {
@@ -121,7 +121,7 @@ function createDirectHandler({discord,direct,payments}) {
         const response=status(row);
         if(row.state==='pending') {
           response.content=`Status pembayaran: ${payment.status}. ${payment.credited?'Pembayaran diterima; menunggu provider.':['expire','deny','cancel','failure'].includes(payment.status)?'Tagihan tidak aktif. Pilih produk kembali untuk membuat tagihan baru.':'Menunggu pembayaran; jangan membayar tagihan lain untuk pesanan ini.'}`;
-          if(payment.qr_url && payment.status==='pending')response.embeds=[new EmbedBuilder().setColor(0x5865F2).setTitle('QRIS Pembelian').setDescription(`Total: **${money(payment.total_charge || row.amount)}**\n${payments.production?'Pindai QRIS untuk membayar.':'MODE UJI — simulator TriPay, bukan uang nyata.'}`).setImage(payment.qr_url)];
+          if(payment.qr_url && payment.status==='pending')response.embeds=[new EmbedBuilder().setColor(0x5865F2).setTitle('QRIS Pembelian').setDescription(`Total: **${money(payment.total_charge || row.amount)}**\n${payment.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}`).setImage(payment.qr_url)];
         }
         await i.editReply(response);
       }else {
@@ -129,7 +129,7 @@ function createDirectHandler({discord,direct,payments}) {
         if(purchase.state!=='pending'){await i.editReply(status(purchase));return true;}
         if(!payment?.qr_url)throw new Error('QR belum tersedia. Hubungi admin untuk memeriksa riwayat tagihan.');
         await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Bayar Langsung QRIS')
-          .setDescription(`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payments.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator TriPay, bukan uang nyata.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran; OTP dikirim melalui DM saat masuk.`)
+          .setDescription(`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payment.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran; OTP dikirim melalui DM saat masuk.`)
           .setImage(payment.qr_url).setFooter({text:purchase.invoice_id})],components:[checkRow(purchase.invoice_id)]});
       }
     }catch(e){await i.editReply({content:e.message,components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
