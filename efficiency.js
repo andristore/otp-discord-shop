@@ -2,6 +2,16 @@ function validateAttachment(a){
   if(!a || !['image/png','image/jpeg','image/webp'].includes(a.contentType) || !Number.isSafeInteger(a.size) || a.size<1 || a.size>8*1024*1024)throw new Error('Pilih gambar PNG/JPG/WebP maksimal 8 MB.');
   require('./store-features').proofIdentity(a.url);return a.url;
 }
+function proofUploadModal(native=true){
+  if(!native)return {custom_id:'manual_request_submit',title:'Kirim Bukti Pembayaran',components:[
+    ['amount','Nominal IDR (minimal 5000)',7,true],['proof','Tautan gambar bukti di Discord',1000,true],['note','Catatan pengirim / waktu pembayaran',200,false]
+  ].map(([custom_id,label,max_length,required])=>({type:1,components:[{type:4,custom_id,label,style:1,max_length,required}]}))};
+  return {custom_id:'manual_upload_submit',title:'Kirim Bukti Pembayaran',components:[
+    {type:18,label:'Nominal IDR (minimal 5000, tanpa titik)',component:{type:4,custom_id:'amount',style:1,max_length:7,required:true}},
+    {type:18,label:'Gambar bukti pembayaran',description:'PNG/JPG/WebP maksimal 8 MB. Saldo masuk setelah admin memeriksa pembayaran.',component:{type:19,custom_id:'gambar',min_values:1,max_values:1,required:true}},
+    {type:18,label:'Catatan pengirim / waktu pembayaran',component:{type:4,custom_id:'note',style:2,max_length:200,required:false}}
+  ]};
+}
 function createEfficiency({db,staff}){
   db.exec(`CREATE TABLE IF NOT EXISTS buyer_favorites(id INTEGER PRIMARY KEY,discord_id TEXT NOT NULL,app TEXT NOT NULL,country TEXT NOT NULL,operator TEXT NOT NULL,name TEXT NOT NULL,UNIQUE(discord_id,app,country,operator));`);
   function save(user,q){
@@ -28,17 +38,23 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
   const nav=(prefix,r,back)=>{const n=row([[prefix+(r.page-1),'Sebelumnya'],[prefix+(r.page+1),'Berikutnya'],[back,'Kembali']]);n.components[0].setDisabled(r.page===0);n.components[1].setDisabled(r.page===r.pages-1);return n;};
   return async i=>{
     const id=String(i.customId || ''),upload=i.isChatInputCommand?.() && i.commandName==='bukti';
-    if(!upload && !/^(favorites(?::|$)|favorite_(save|detail|delete):|shop_orders$|active_orders:|active_order:|active_invoice$|manual_upload$|admin_eff_summary$)/.test(id))return false;
+    if(!upload && !/^(favorites(?::|$)|favorite_(save|detail|delete):|shop_orders$|active_orders:|active_order:|active_invoice$|manual_upload$|manual_upload_submit$|admin_eff_summary$)/.test(id))return false;
     if(id==='admin_eff_summary' && !staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
+    if(id==='manual_upload'){
+      try{await i.showModal(proofUploadModal(typeof discord.ModalSubmitFields?.prototype?.getUploadedFiles==='function'));}
+      catch{await i.reply({ephemeral:true,content:'Form upload belum dapat dibuka. Gunakan formulir tautan bukti pembayaran.',components:[row([['manual_request','Kirim Tautan Bukti'],['topup_manual','Kembali']])]});}
+      return true;
+    }
     await i.deferReply({ephemeral:true});
     try{
       const user=i.user.id;
-      if(upload){
-        const proof=validateAttachment(i.options.getAttachment('gambar',true));
-        const r=features.submit({id:i.id,userId:user,amount:i.options.getInteger('nominal',true),proof,note:i.options.getString('catatan')?.trim() || ''});
+      if(upload || id==='manual_upload_submit'){
+        let attachment,amount,note;
+        if(upload){attachment=i.options.getAttachment('gambar',true);amount=i.options.getInteger('nominal',true);note=i.options.getString('catatan')?.trim() || '';}
+        else {const files=i.fields.getUploadedFiles('gambar',true);if(!files || files.size!==1)throw Error('Pilih tepat satu gambar bukti pembayaran.');attachment=files.first();const raw=i.fields.getTextInputValue('amount').trim();if(!/^\d+$/.test(raw))throw Error('Nominal rupiah harus bilangan bulat tanpa titik/koma.');amount=Number(raw);note=i.fields.getTextInputValue('note').trim();}
+        const proof=validateAttachment(attachment);
+        const r=features.submit({id:i.id,userId:user,amount,proof,note});
         await i.editReply({content:`✅ Bukti gambar diterima. Pengajuan ${r.id}: ${money(r.amount)}. Saldo masuk setelah admin memeriksa mutasi dan menyetujui.`,components:[row([['manual_request_list:0','Status Pengajuan']])]});features.poll().catch(()=>{});
-      }else if(id==='manual_upload'){
-        await i.editReply({content:'**Kirim gambar bukti langsung**\nKetik `/bukti`, isi **nominal** (minimal 5000), pilih/upload **gambar**, lalu kirim. Catatan bersifat opsional.\nPNG/JPG/WebP maksimal 8 MB. Tidak perlu menyalin tautan gambar.\nSaldo masuk setelah admin memeriksa pembayaran.',components:[row([['manual_request_list:0','Status Pengajuan'],['topup_manual','Kembali'],['manual_request','Alternatif Tautan']])]});
       }else if(id.startsWith('favorite_save:')){
         const f=model.save(user,commerce.checkout(user,id.split(':')[1]));await i.editReply({content:'⭐ Layanan disimpan sebagai favorit. Harga dan stok diperiksa kembali saat dibuka.',components:[row([['favorite_open:'+f.id,'Buka Favorit'],['favorites','Favorit Saya']])]});
       }else if(id==='favorites' || id.startsWith('favorites:') || id.startsWith('favorite_delete:')){
@@ -69,4 +85,4 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
     }catch(e){await i.editReply({content:e.message,allowedMentions:{parse:[]}});}return true;
   };
 }
-module.exports={validateAttachment,createEfficiency,createEfficiencyHandler};
+module.exports={validateAttachment,proofUploadModal,createEfficiency,createEfficiencyHandler};

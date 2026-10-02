@@ -278,11 +278,7 @@ async function startDiscord(){
   if(!process.env.DISCORD_TOKEN) return console.log("DISCORD_TOKEN belum diisi; bot tidak dijalankan.");
   const commands=[
     new SlashCommandBuilder().setName("shop").setDescription("Buka panel toko OTP"),
-    new SlashCommandBuilder().setName("admin").setDescription("Buka panel admin toko OTP"),
-    new SlashCommandBuilder().setName('bukti').setDescription('Ajukan isi saldo manual dengan gambar bukti')
-      .addIntegerOption(o=>o.setName('nominal').setDescription('Rupiah tanpa titik, minimal 5000').setMinValue(5000).setMaxValue(1000000).setRequired(true))
-      .addAttachmentOption(o=>o.setName('gambar').setDescription('Gambar bukti PNG, JPG, atau WebP').setRequired(true))
-      .addStringOption(o=>o.setName('catatan').setDescription('Pengirim / waktu pembayaran').setMaxLength(200))
+    new SlashCommandBuilder().setName("admin").setDescription("Buka panel admin toko")
   ].map(x=>x.toJSON());
   const rest=new REST({version:"10"}).setToken(process.env.DISCORD_TOKEN);
   if(process.env.DISCORD_CLIENT_ID) await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),{body:commands});
@@ -298,7 +294,7 @@ async function startDiscord(){
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
       .setDescription("Selamat datang di Produk Digital by Maboyy")
-      .setFooter({text:"Hi, Belanja Produk Digital Yukk • Automated Service"});
+      .setFooter({text:"Since 2020"});
   }
 
   function mainRow(){
