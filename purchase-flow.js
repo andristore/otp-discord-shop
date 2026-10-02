@@ -99,7 +99,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
     if(adminView)buttons.push(new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Secondary));
     if(['app','country'].includes(stage))buttons.push(new ButtonBuilder().setCustomId(key('flow_search',stage,state)).setLabel(stage==='app'?'Cari Aplikasi':'Cari Negara').setStyle(ButtonStyle.Primary));
     for(let offset=0;offset<buttons.length;offset+=5)components.push(new ActionRowBuilder().addComponents(...buttons.slice(offset,offset+5)));
-    return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`🛒 Hi, OTP Sms Virtual • ${titles[stage]}`)
+    return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`🛒 Hi, Belanja Produk Digital Yukk • ${titles[stage]}`)
       .setDescription(options.length?(adminView && stage==='product'?'Harga dasar dan stok dari SMSCode; harga jual mengikuti pengaturan toko. Tekan produk untuk detail.':stage==='product'?'Pilih harga dan stok, lalu periksa konfirmasi pembelian.':'Tekan tombol pilihan untuk melanjutkan.'):'Pilihan ini belum memiliki produk di katalog SMSCode. Kembali atau pilih aplikasi lain.')
       .setFooter({text:`Halaman ${page+1}/${pages} • ${options.length} pilihan`})],components};
   }

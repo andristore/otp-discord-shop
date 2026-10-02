@@ -82,7 +82,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
   }
   function home() {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
-      .setDescription('Pilih kategori untuk mengelola Hi, OTP Sms Virtual.')],components:[
+      .setDescription('Pilih kategori untuk mengelola Hi, Belanja Produk Digital Yukk.')],components:[
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('admin_catalog_menu').setLabel('Toko').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Pembeli').setStyle(ButtonStyle.Primary),

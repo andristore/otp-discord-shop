@@ -80,8 +80,8 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     amount=parseTopup(amount,purpose==='purchase'?1000:5000);const email=parseCustomerEmail(options.email);
     const orderId=options.orderId || 'maboyy-'+randomUUID();
     reserve(orderId,userId,amount,purpose);
-    const status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli Hi, OTP Sms Virtual').slice(0,100),customer_email:email,
-      order_items:[{name:purpose==='purchase'?'Pembelian Hi, OTP Sms Virtual':'Isi Saldo Hi, OTP Sms Virtual',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
+    const status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli Hi, Belanja Produk Digital Yukk').slice(0,100),customer_email:email,
+      order_items:[{name:purpose==='purchase'?'Pembelian Hi, Belanja Produk Digital Yukk':'Isi Saldo Hi, Belanja Produk Digital Yukk',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
       signature:createHmac('sha256',privateKey).update(merchantCode+orderId+amount).digest('hex')});
     // Reuse the same strict checks for the charge response and subsequent detail responses.
     validateStatus(db.prepare('SELECT * FROM topups WHERE order_id=?').get(orderId),status);
@@ -111,7 +111,7 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
     const id=String(i.customId || '');
     if(!['shop_topup','topup_qris','topup_manual','topup_amount','topup_history'].includes(id) && !id.startsWith('topup_check:'))return false;
     if(id==='shop_topup') {
-      await i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Isi Saldo • Hi, OTP Sms Virtual')
+      await i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Isi Saldo • Hi, Belanja Produk Digital Yukk')
         .setDescription('Minimal isi saldo **5.000 IDR**.\n\n**QRIS Otomatis** — saldo masuk setelah pembayaran terverifikasi.\n**Manual** — hubungi admin dan kirim bukti pembayaran; saldo ditambahkan setelah diperiksa.')],components:[new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('topup_qris').setLabel('QRIS Otomatis').setStyle(ButtonStyle.Primary).setDisabled(!payments.configured),
           new ButtonBuilder().setCustomId('topup_manual').setLabel('Manual').setStyle(ButtonStyle.Secondary),
@@ -130,7 +130,7 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
     if(!payments.configured && !id.startsWith('topup_check:') && id!=='topup_history') {await i.reply({ephemeral:true,content:'QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran. Anda tetap bisa memakai Isi Saldo → Manual.'});return true;}
     if(id==='topup_qris' && payments.active?.(i.user.id)){await i.reply({ephemeral:true,content:'Masih ada tagihan QRIS aktif. Lanjutkan tagihan sebelumnya.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Buka Tagihan Aktif').setStyle(ButtonStyle.Primary))]});return true;}
     if(id==='topup_qris') {
-      await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo QRIS • Hi, OTP Sms Virtual')
+      await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo QRIS')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount')
           .setLabel('Nominal IDR (5.000–1.000.000)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7)),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('email').setLabel('Email untuk tagihan QRIS').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(254))));
@@ -148,7 +148,7 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
         await i.editReply({content:p.credited?`✅ Pembayaran diterima. ${money(p.amount)} sudah masuk ke saldo Anda.`:`Status pembayaran: ${p.status}. Saldo ditambahkan setelah pembayaran terkonfirmasi.`});
       } else {
         const p=await payments.create(i.user.id,parseTopup(i.fields.getTextInputValue('amount')),{email:i.fields.getTextInputValue('email'),name:i.user.username});
-        await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 QRIS • Hi, OTP Sms Virtual')
+        await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 QRIS • Hi, Belanja Produk Digital Yukk')
           .setDescription(`Saldo masuk: **${money(p.amount)}**\nBiaya QRIS pembeli: **${money(p.fee_customer || 0)}**\nTotal bayar: **${money(p.total_charge)}**\n${p.production?'Bayar dengan memindai QRIS.':'MODE UJI — gunakan simulator '+(p.gateway==='midtrans'?'Midtrans':'TriPay')+'; bukan pembayaran nyata.'}\nSaldo masuk otomatis setelah pembayaran dikonfirmasi.`)
           .setImage(p.qr_url).setFooter({text:p.order_id})],components:[new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('topup_check:'+p.order_id).setLabel('Cek Pembayaran').setStyle(ButtonStyle.Success))]});

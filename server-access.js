@@ -24,7 +24,7 @@ function createServerAccess({db,sendDM,env=process.env,staff}) {
     const sent=new Set(row.notified.split(',').filter(Boolean));
     for(const adminId of staff?staff.ids():[...new Set((env.ADMIN_DISCORD_IDS || '').split(',').map(x=>x.trim()).filter(x=>/^\d{17,20}$/.test(x)))])if(!sent.has(adminId)) {
       try {
-        await sendDM(adminId,`🔐 Hi, OTP Sms Virtual — permintaan izin server\nServer: ${row.name}\nID: ${id}\nPemilik: ${row.owner_id || '-'}\nLayanan terkunci sampai disetujui. Buka /admin → Transaksi → Izin Server untuk menyetujui atau menolak.`);
+        await sendDM(adminId,`🔐 Hi, Belanja Produk Digital Yukk — permintaan izin server\nServer: ${row.name}\nID: ${id}\nPemilik: ${row.owner_id || '-'}\nLayanan terkunci sampai disetujui. Buka /admin → Transaksi → Izin Server untuk menyetujui atau menolak.`);
         sent.add(adminId);db.prepare('UPDATE discord_server_access SET notified=? WHERE guild_id=?').run([...sent].join(','),id);
       }catch{}
     }return get(id);
@@ -49,7 +49,7 @@ function createServerAccess({db,sendDM,env=process.env,staff}) {
     const adminMenu=(i.isChatInputCommand() && i.commandName==='admin') || id.startsWith('admin_') || id.startsWith('provider_');
     if(adminMenu && isAdmin(i.user.id))return false;
     if(get(i.guildId)?.status==='approved')return false;
-    await i.reply({ephemeral:true,content:'🔒 Server ini belum mendapat izin admin Hi, OTP Sms Virtual. Minta admin toko membuka /admin → Transaksi → Izin Server untuk verifikasi.'});return true;
+    await i.reply({ephemeral:true,content:'🔒 Server ini belum mendapat izin admin Hi, Belanja Produk Digital Yukk. Minta admin toko membuka /admin → Transaksi → Izin Server untuk verifikasi.'});return true;
   }
   const removed=id=>db.prepare("UPDATE discord_server_access SET present=0,status='revoked' WHERE guild_id=?").run(String(id));
   return {get,list,register,decide,gate,removed};

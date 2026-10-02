@@ -72,8 +72,8 @@ let storeFeatures;
 const assertStoreOpen=()=>storeFeatures?.assertOpen();
 const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
 app.use(express.json({verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
-let direct;
-const payments=createPayments({db,onSettled:payment=>direct.fulfill(payment)});
+let direct,manualProducts;
+const payments=createPayments({db,onSettled:payment=>payment.order_id.startsWith('manual-buy-')?manualProducts.fulfillPayment(payment):direct.fulfill(payment)});
 direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
 payments.mount(app);
 const directPoll=setInterval(()=>direct.poll().catch(console.error),30000);
@@ -267,6 +267,7 @@ const client = new Client({intents:[GatewayIntentBits.Guilds]});
 const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
 const staff=createStaff({db});configureAdminAccess(staff);
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM});
+manualProducts=createManualProducts({db,staff,payments,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
   sendDM:sendDiscordDM,staff});
@@ -292,16 +293,12 @@ async function startDiscord(){
     return db.prepare("SELECT balance FROM users WHERE discord_id=?").get(id).balance;
   }
 
-  function shopEmbed(title="Hi, OTP Sms Virtual"){
+  function shopEmbed(title="Hi, Belanja Produk Digital Yukk"){
     return new EmbedBuilder()
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
-      .setDescription(
-        "Selamat datang di Hi, OTP Sms Virtual.\n\n" +
-        "Pilih menu di bawah untuk mulai bertransaksi.\n" +
-        "🔒 OTP diproses melalui provider. Produk manual diproses oleh admin."
-      )
-      .setFooter({text:"Hi, OTP Sms Virtual • Automated Service"});
+      .setDescription("Selamat datang di Produk Digital by Maboyy")
+      .setFooter({text:"Hi, Belanja Produk Digital Yukk • Automated Service"});
   }
 
   function mainRow(){
@@ -324,7 +321,6 @@ async function startDiscord(){
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id),audit:toolkit.audit});
-  const manualProducts=createManualProducts({db,staff,audit:toolkit.audit,maintenance:()=>storeFeatures.maintenance()});
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
@@ -502,6 +498,7 @@ async function startDiscord(){
   const stockPoll=setInterval(()=>toolkit.stock().catch(console.error),60000);stockPoll.unref();toolkit.stock().catch(console.error);
   const backupPoll=setInterval(()=>toolkit.backup().catch(console.error),3600000);backupPoll.unref();toolkit.backup().catch(console.error);
   const manualPoll=setInterval(()=>storeFeatures.poll().catch(console.error),30000);manualPoll.unref();storeFeatures.poll().catch(console.error);
+  const manualProductPoll=setInterval(()=>manualProducts.poll().catch(console.error),30000);manualProductPoll.unref();manualProducts.poll().catch(console.error);
 }
 startDiscord();
 

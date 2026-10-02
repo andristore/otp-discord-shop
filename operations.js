@@ -41,7 +41,7 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
           }
           const latest=db.prepare('SELECT * FROM orders WHERE id=?').get(row.id);
           if(!latest.refunded && latest.otp && latest.otp_notified!==latest.otp) {
-            await sendDM(latest.discord_id,`🔢 Hi, OTP Sms Virtual — OTP masuk\nOrder: ${latest.provider_order_id}\nNomor: ${latest.phone || '-'}\nOTP: ${latest.otp}\nGunakan kode pada layanan yang Anda beli.`);
+            await sendDM(latest.discord_id,`🔢 Hi, Belanja Produk Digital Yukk — OTP masuk\nOrder: ${latest.provider_order_id}\nNomor: ${latest.phone || '-'}\nOTP: ${latest.otp}\nGunakan kode pada layanan yang Anda beli.`);
             db.prepare('UPDATE orders SET otp_notified=? WHERE id=?').run(latest.otp,latest.id);
           }
         }catch { /* Keep unsent OTP for a later DM retry and the buyer's Cek OTP button. */ }
@@ -60,7 +60,7 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
       const notified=new Set(read('low_notified','').split(',').filter(Boolean));
       const admins=staff?staff.ids():[...new Set((env.ADMIN_DISCORD_IDS || '').split(',').map(x=>x.trim()).filter(x=>/^\d{17,20}$/.test(x)))];
       for(const id of admins)if(!notified.has(id)) {
-        try{await sendDM(id,`⚠️ Hi, OTP Sms Virtual — saldo SMSCode menipis\nSaldo: ${balance.toLocaleString('id-ID')} IDR\nBatas peringatan: ${s.lowThreshold.toLocaleString('id-ID')} IDR\nIsi saldo provider agar pesanan dapat diproses.`);notified.add(id);write('low_notified',[...notified].join(','));}catch{}
+        try{await sendDM(id,`⚠️ Hi, Belanja Produk Digital Yukk — saldo SMSCode menipis\nSaldo: ${balance.toLocaleString('id-ID')} IDR\nBatas peringatan: ${s.lowThreshold.toLocaleString('id-ID')} IDR\nIsi saldo provider agar pesanan dapat diproses.`);notified.add(id);write('low_notified',[...notified].join(','));}catch{}
       }
     }finally{lowBusy=false;}
   }
