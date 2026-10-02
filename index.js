@@ -285,7 +285,7 @@ async function startDiscord(){
     );
   }
 
-  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing});
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id)});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments});
