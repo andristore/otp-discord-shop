@@ -6,7 +6,8 @@ function buttonColor(button) {
   if (button.type !== 2 || !button.custom_id || ![1, 2, 3, 4].includes(button.style)) return {...button};
   const id = button.custom_id;
   let style = 1; // Blue: store submenus and navigation.
-  if (/^(flow_pick:|provider_flow_pick:|pick_product:|provider_product:|product:|manual_detail:|admin_manual_detail:)/.test(id)) style = 2;
+  if (/^(Kembali|Menu Awal(?: Admin)?|Mulai Ulang)$/i.test(String(button.label || '').trim().replace(/^🏠\s*/, ''))) style = 1;
+  else if (/^(flow_pick:|provider_flow_pick:|pick_product:|provider_product:|product:|manual_detail:|admin_manual_detail:)/.test(id)) style = 2;
   else if (button.style === 4 || /(^|[_:])(cancel|delete|remove|revoke|reject|rejected|refund)([_:]|$)/.test(id)) style = 4;
   else if (button.style === 3 || /^(shop_balance$|confirm_buy:|qris_buy:|topup_qris$|topup_check:|direct_check:|check_otp:|admin_store_approve:)/.test(id)) style = 3;
   return {...button, style};
