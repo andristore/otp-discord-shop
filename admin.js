@@ -67,7 +67,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
     if(id==='admin_transactions_menu')return menu('💳 Pembayaran','Verifikasi pembayaran dan pengajuan.',[
       ['admin_manual_orders:0','Pesanan Produk Manual'],['admin_store_requests:0','Pengajuan Manual'],['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']]);
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
-      ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fee','Catat Biaya Gateway'],['admin_tools_fees:0','Riwayat Biaya Gateway']]);
+      ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway']]);
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Akses, backup, dan pemantauan toko.',[
       ['admin_staff_access','Izin & Admin'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Koneksi Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
   }
