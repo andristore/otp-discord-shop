@@ -25,7 +25,7 @@ function flowOptions(stage, state, catalog) {
 }
 
 function createPurchaseFlow({discord,smscode,smsCatalogProducts}) {
-  const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,StringSelectMenuBuilder}=discord;
+  const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle}=discord;
   const titles={app:'1. Pilih Aplikasi',country:'2. Pilih Negara',operator:'3. Pilih Operator',product:'4. Pilih Harga & Stok'};
   const next={app:'country',country:'operator',operator:'product'};
   const previous={country:'app',operator:'country',product:'operator'};
@@ -49,41 +49,45 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts}) {
     return {services,countries,products:result.data,operators};
   }
   function render(stage,state,options,requested=0) {
-    const pages=Math.max(1,Math.ceil(options.length/25));
+    const pages=Math.max(1,Math.ceil(options.length/20));
     const page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1);
     const components=[];
-    if(options.length) components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
-      .setCustomId(stage==='product'?'buy_product':key('flow_select',stage,state))
-      .setPlaceholder(titles[stage]).addOptions(options.slice(page*25,(page+1)*25).map(o=>({
-        ...o,label:String(o.label).slice(0,100),...(o.description?{description:o.description.slice(0,100)}:{})
-      })))));
+    const visible=options.slice(page*20,(page+1)*20);
+    for(let offset=0;offset<visible.length;offset+=5) {
+      components.push(new ActionRowBuilder().addComponents(...visible.slice(offset,offset+5).map(o=>
+        new ButtonBuilder().setCustomId(stage==='product'?`pick_product:${o.value}`:`${key('flow_pick',stage,state,page)}:${o.value}`)
+          .setLabel(String(stage==='product'?o.description:o.label).slice(0,80))
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(stage==='product' && o.description.includes('Tidak tersedia'))
+      )));
+    }
     const buttons=[];
     if(pages>1) buttons.push(
       new ButtonBuilder().setCustomId(key('flow_page',stage,state,page-1)).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
       new ButtonBuilder().setCustomId(key('flow_page',stage,state,page+1)).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1));
     if(previous[stage])buttons.push(new ButtonBuilder().setCustomId(key('flow_page',previous[stage],state)).setLabel('Kembali').setStyle(ButtonStyle.Secondary));
     buttons.push(new ButtonBuilder().setCustomId('shop_products').setLabel('Mulai Ulang').setStyle(ButtonStyle.Primary));
-    components.push(new ActionRowBuilder().addComponents(buttons));
+    components.push(new ActionRowBuilder().addComponents(...buttons));
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`🛒 OTP Maboyy • ${titles[stage]}`)
-      .setDescription(options.length?(stage==='product'?'Pilih harga dan stok, lalu periksa konfirmasi pembelian.':'Pilih dari dropdown untuk melanjutkan.'):'Pilihan ini belum memiliki produk di katalog SMSCode. Kembali atau pilih aplikasi lain.')
+      .setDescription(options.length?(stage==='product'?'Pilih harga dan stok, lalu periksa konfirmasi pembelian.':'Tekan tombol pilihan untuk melanjutkan.'):'Pilihan ini belum memiliki produk di katalog SMSCode. Kembali atau pilih aplikasi lain.')
       .setFooter({text:`Halaman ${page+1}/${pages} • ${options.length} pilihan`})],components};
   }
   return async function handleFlow(i) {
     const id=String(i.customId || '');
-    if(id!=='shop_products' && !id.startsWith('flow_page:') && !id.startsWith('flow_select:'))return false;
+    if(id!=='shop_products' && !id.startsWith('flow_page:') && !id.startsWith('flow_select:') && !id.startsWith('flow_pick:'))return false;
     if(id==='shop_products') {
       await i.deferReply({ephemeral:true});
       const state={};
       await i.editReply(render('app',state,flowOptions('app',state,await catalog('app',state))));
       return true;
     }
-    const [prefix,stage,app,country,operator,rawPage]=id.split(':');
+    const [prefix,stage,app,country,operator,rawPage,picked]=id.split(':');
     const state={app:app==='-'?undefined:app,country:country==='-'?undefined:country,operator:operator==='-'?undefined:operator};
     await i.deferUpdate();
     if(!titles[stage])throw new Error('Menu tidak valid. Buka Beli OTP kembali.');
     const data=await catalog(stage,state);
-    if(prefix==='flow_select') {
-      const value=i.values?.[0];
+    if(prefix==='flow_select' || prefix==='flow_pick') {
+      const value=prefix==='flow_pick'?picked:i.values?.[0];
       if(!flowOptions(stage,state,data).some(o=>o.value===value)) {
         await i.editReply({content:'Pilihan tidak tersedia lagi. Klik Mulai Ulang.',embeds:[],components:render('app',{},[]).components});
         return true;

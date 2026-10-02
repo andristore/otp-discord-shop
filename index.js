@@ -407,9 +407,9 @@ async function startDiscord(){
         }
       }
 
-      if(i.isStringSelectMenu() && i.customId==="buy_product"){
+      if((i.isButton() && i.customId.startsWith("pick_product:")) || (i.isStringSelectMenu() && i.customId==="buy_product")){
         await i.deferReply({ephemeral:true});
-        const pid=Number(i.values[0]);
+        const pid=Number(i.isButton()?i.customId.split(":")[1]:i.values[0]);
         const data=await smsCatalogProducts();
         const p=(data.data||[]).find(x=>Number(x.id)===pid);
         if(!p || !productAvailable(p)) return i.editReply({content:"Produk sedang tidak tersedia. Pilih layanan lain dari katalog."});

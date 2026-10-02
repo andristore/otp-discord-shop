@@ -16,7 +16,7 @@ function parseProduct(fields) {
 }
 
 function createAdminHandler({discord, db, smscode}) {
-  const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,StringSelectMenuBuilder,
+  const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const amount=value=>`${Number(value || 0).toLocaleString('id-ID')} IDR`;
   function home() {
@@ -31,15 +31,16 @@ function createAdminHandler({discord, db, smscode}) {
   }
   function products(requested=0) {
     const count=db.prepare('SELECT COUNT(*) c FROM products').get().c;
-    const total=Math.max(1,Math.ceil(count/25));
+    const total=Math.max(1,Math.ceil(count/20));
     const page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),total-1);
-    const rows=db.prepare('SELECT * FROM products ORDER BY id DESC LIMIT 25 OFFSET ?').all(page*25);
+    const rows=db.prepare('SELECT * FROM products ORDER BY id DESC LIMIT 20 OFFSET ?').all(page*20);
     const components=[];
-    if(rows.length) {
-      components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
-        .setCustomId('admin_edit').setPlaceholder('Pilih produk untuk mengedit')
-        .addOptions(rows.map(p=>({label:`#${p.id} ${p.name}`.slice(0,100),value:String(p.id),
-          description:`${p.country}/${p.service} • ${amount(p.price)} • ${p.enabled?'aktif':'nonaktif'}`.slice(0,100)})))));
+    for(let offset=0;offset<rows.length;offset+=5) {
+      components.push(new ActionRowBuilder().addComponents(...rows.slice(offset,offset+5).map(p=>
+        new ButtonBuilder().setCustomId(`admin_edit:${p.id}`)
+          .setLabel(`#${p.id} ${p.name} • ${amount(p.price)} • ${p.enabled?'aktif':'nonaktif'}`.slice(0,80))
+          .setStyle(ButtonStyle.Secondary)
+      )));
     }
     components.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`admin_products:${page-1}`).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
@@ -48,7 +49,7 @@ function createAdminHandler({discord, db, smscode}) {
       new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Primary)
     ));
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('📋 Katalog Lokal')
-      .setDescription(rows.length?'Pilih produk di dropdown untuk mengubah nama, negara, layanan, harga, atau status aktif.':'Belum ada produk lokal.')
+      .setDescription(rows.length?'Tekan tombol produk untuk mengubah nama, negara, layanan, harga, atau status aktif.':'Belum ada produk lokal.')
       .setFooter({text:`Halaman ${page+1}/${total} • ${count} produk lokal`})],components};
   }
   function productModal(product) {
@@ -77,7 +78,12 @@ function createAdminHandler({discord, db, smscode}) {
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(i.isButton()) {
-      if(i.customId==='admin_add') await i.showModal(productModal());
+      if(i.customId.startsWith('admin_edit:')) {
+        const p=db.prepare('SELECT * FROM products WHERE id=?').get(i.customId.split(':')[1]);
+        if(!p) await i.reply({ephemeral:true,content:'Produk lokal tidak ditemukan.'});
+        else await i.showModal(productModal(p));
+      }
+      else if(i.customId==='admin_add') await i.showModal(productModal());
       else if(i.customId==='admin_home') await i.update(home());
       else if(i.customId==='admin_close') await i.update({content:'Panel admin ditutup. Ketik /admin untuk membukanya kembali.',embeds:[],components:[]});
       else if(i.customId.startsWith('admin_products:')) await i.update(products(Number(i.customId.split(':')[1])));
