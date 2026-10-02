@@ -1,99 +1,97 @@
-const {createHash,timingSafeEqual,randomUUID}=require('node:crypto');
-
-function validSignature(body,serverKey) {
-  if(!serverKey || !body || !['order_id','status_code','gross_amount','signature_key'].every(k=>typeof body[k]==='string'))return false;
-  if(!/^[a-f0-9]{128}$/i.test(body.signature_key))return false;
-  const expected=createHash('sha512').update(body.order_id+body.status_code+body.gross_amount+serverKey).digest();
-  return timingSafeEqual(expected,Buffer.from(body.signature_key,'hex'));
+const {createHmac,timingSafeEqual,randomUUID}=require('node:crypto');
+function validSignature(raw,signature,key) {
+  if(!key || !Buffer.isBuffer(raw) || typeof signature!=='string' || !/^[a-f0-9]{64}$/i.test(signature))return false;
+  return timingSafeEqual(createHmac('sha256',key).update(raw).digest(),Buffer.from(signature,'hex'));
+}
+function parseCustomerEmail(value) {
+  const email=String(value || '').trim();
+  if(email.length>254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw new Error('Masukkan alamat email yang valid untuk tagihan TriPay.');
+  return email;
 }
 function parseTopup(value) {
-  const raw=String(value).trim();
-  const amount=Number(raw);
-  if(!/^\d+$/.test(raw) || !Number.isSafeInteger(amount) || amount<1000 || amount>1000000) {
-    throw new Error('Nominal isi saldo harus bilangan bulat antara 1.000 dan 1.000.000 IDR.');
-  }
+  const raw=String(value).trim();const amount=Number(raw);
+  if(!/^\d+$/.test(raw) || !Number.isSafeInteger(amount) || amount<1000 || amount>1000000)throw new Error('Nominal QRIS harus bilangan bulat 1.000–1.000.000 IDR.');
   return amount;
 }
 function validateStatus(payment,status) {
-  if(status.order_id!==payment.order_id || Number(status.gross_amount)!==payment.amount || status.currency!=='IDR' || status.payment_type!=='qris')throw new Error('Data pembayaran tidak sesuai tagihan.');
-  return status.transaction_status==='settlement' && (!status.fraud_status || status.fraud_status==='accept');
+  const fee=Number(status.fee_customer);const merchantFee=Number(status.fee_merchant);const total=Number(status.amount);
+  const items=status.order_items;
+  const subtotal=Array.isArray(items)?items.reduce((n,i)=>n+Number(i.price)*Number(i.quantity),0):NaN;
+  if(status.merchant_ref!==payment.order_id || typeof status.reference!=='string' || !status.reference ||
+    (payment.provider_ref && status.reference!==payment.provider_ref) || status.payment_method!==payment.channel ||
+    !Number.isSafeInteger(fee) || fee<0 || !Number.isSafeInteger(merchantFee) || merchantFee<0 ||
+    subtotal!==payment.amount || total!==payment.amount+fee ||
+    (payment.total_charge!=null && (total!==payment.total_charge || fee!==payment.fee_customer || merchantFee!==payment.fee_merchant)) ||
+    Number(status.amount_received)!==total-fee-merchantFee || !['UNPAID','PAID','FAILED','EXPIRED','REFUND'].includes(status.status))throw new Error('Data pembayaran tidak sesuai tagihan.');
+  return status.status==='PAID';
 }
 function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{}}) {
-  const serverKey=env.MIDTRANS_SERVER_KEY;
-  const production=env.MIDTRANS_IS_PRODUCTION==='true';
-  const base=production?'https://api.midtrans.com/v2':'https://api.sandbox.midtrans.com/v2';
-  db.exec(`CREATE TABLE IF NOT EXISTS topups (
-    order_id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )`);
-  if(!db.prepare('PRAGMA table_info(topups)').all().some(c=>c.name==='purpose'))db.exec("ALTER TABLE topups ADD COLUMN purpose TEXT NOT NULL DEFAULT 'topup'");
-  async function request(path,body) {
-    if(!serverKey)throw new Error('Pembayaran QRIS belum dikonfigurasi oleh admin.');
-    const r=await fetchImpl(base+path,{method:body?'POST':'GET',headers:{
-      'Content-Type':'application/json',Accept:'application/json',
-      Authorization:'Basic '+Buffer.from(serverKey+':').toString('base64')
-    },...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(15000)});
-    const data=await r.json();
-    if(!r.ok || !['200','201'].includes(String(data.status_code)))throw new Error('Provider pembayaran belum dapat memproses permintaan. Coba cek status atau hubungi admin.');
-    return data;
+  const apiKey=env.TRIPAY_API_KEY,privateKey=env.TRIPAY_PRIVATE_KEY,merchantCode=env.TRIPAY_MERCHANT_CODE;
+  const production=env.TRIPAY_IS_PRODUCTION==='true';const configured=Boolean(apiKey && privateKey && merchantCode);
+  const channel=env.TRIPAY_QRIS_CHANNEL || 'QRIS';
+  if(!['QRIS','QRISC','QRIS2','QRIS_SHOPEEPAY'].includes(channel))throw new Error('TRIPAY_QRIS_CHANNEL tidak didukung. Gunakan kode channel QRIS aktif di akun TriPay.');
+  db.exec(`CREATE TABLE IF NOT EXISTS topups(order_id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+  const columns=new Set(db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name));
+  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
+  async function request(path,body,live=production) {
+    if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
+    const base=live?'https://tripay.co.id/api':'https://tripay.co.id/api-sandbox';
+    const response=await fetchImpl(base+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Accept:'application/json',Authorization:'Bearer '+apiKey},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(15000)});
+    const result=await response.json();
+    if(!response.ok || result.success!==true || !result.data)throw new Error('TriPay belum dapat memproses permintaan. Periksa channel/konfigurasi atau cek tagihan sebelum mencoba lagi.');
+    return result.data;
   }
+  const normalize=s=>({UNPAID:'pending',PAID:'settlement',EXPIRED:'expire',FAILED:'failure',REFUND:'refund'})[s];
+  function qrUrl(value) {if(!value)return null;const u=new URL(value);if(u.protocol!=='https:' || u.username || u.password)throw new Error('Alamat QR TriPay tidak valid.');return u.href;}
   const apply=db.transaction((status)=>{
-    const payment=db.prepare('SELECT * FROM topups WHERE order_id=?').get(status.order_id);
-    if(!payment)throw new Error('Tagihan tidak ditemukan.');
-    const settled=validateStatus(payment,status);
-    if(payment.credited)return {...payment,status:'settlement'};
-    db.prepare('UPDATE topups SET status=? WHERE order_id=?').run(String(status.transaction_status),payment.order_id);
-    if(settled) {
-      const changed=db.prepare('UPDATE topups SET credited=1 WHERE order_id=? AND credited=0').run(payment.order_id);
-      if(changed.changes && payment.purpose==='topup')db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(payment.discord_id,payment.amount);
+    const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='tripay'").get(status.merchant_ref);
+    if(!p)throw new Error('Tagihan tidak ditemukan.');const settled=validateStatus(p,status);
+    db.prepare('UPDATE topups SET provider_ref=?,total_charge=?,fee_customer=?,fee_merchant=?,qr_url=COALESCE(?,qr_url) WHERE order_id=?').run(status.reference,Number(status.amount),Number(status.fee_customer),Number(status.fee_merchant),qrUrl(status.qr_url),p.order_id);
+    if(!p.credited){
+      db.prepare('UPDATE topups SET status=? WHERE order_id=?').run(normalize(status.status),p.order_id);
+      if(settled){const changed=db.prepare('UPDATE topups SET credited=1 WHERE order_id=? AND credited=0').run(p.order_id);
+        if(changed.changes && p.purpose==='topup')db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(p.discord_id,p.amount);
+      }
     }
-    return db.prepare('SELECT * FROM topups WHERE order_id=?').get(payment.order_id);
+    return db.prepare('SELECT * FROM topups WHERE order_id=?').get(p.order_id);
   });
-  async function refresh(orderId,userId) {
-    const payment=db.prepare('SELECT * FROM topups WHERE order_id=?').get(orderId);
-    if(!payment || (userId && payment.discord_id!==userId))throw new Error('Tagihan tidak ditemukan.');
-    const status=await request('/'+encodeURIComponent(orderId)+'/status');
-    const action=status.actions?.find(a=>a.name==='generate-qr-code');
-    if(action?.url){try{const u=new URL(action.url);if(u.protocol==='https:' && ['api.midtrans.com','api.sandbox.midtrans.com'].includes(u.hostname))db.prepare('UPDATE topups SET qr_url=? WHERE order_id=?').run(u.href,orderId);}catch {}}
-    const updated=apply(status);
-    if(updated.credited && updated.purpose==='purchase')await onSettled(updated);
-    return updated;
+  async function refresh(orderId,userId,callbackReference) {
+    const p=db.prepare('SELECT * FROM topups WHERE order_id=?').get(orderId);
+    if(!p || (userId && p.discord_id!==userId))throw new Error('Tagihan tidak ditemukan.');
+    if(p.gateway!=='tripay')throw new Error('Tagihan lama berasal dari Midtrans. Hubungi admin untuk memeriksa tagihan lama.');
+    if(Boolean(p.production)!==production)throw new Error('Tagihan dibuat pada mode TriPay berbeda. Hubungi admin; jangan membayar ulang.');
+    const reference=p.provider_ref || callbackReference;
+    if(!reference)throw new Error('Referensi TriPay belum diterima. Tunggu callback atau minta admin memeriksa merchant_ref '+p.order_id+'. Jangan membuat pembayaran ulang dulu.');
+    const status=await request('/transaction/detail?reference='+encodeURIComponent(reference),undefined,Boolean(p.production));
+    const updated=apply(status);if(updated.credited && updated.purpose==='purchase')await onSettled(updated);return updated;
   }
   async function create(userId,amount,options={}) {
-    if(!serverKey)throw new Error('Pembayaran QRIS belum dikonfigurasi oleh admin.');
-    const purpose=options.purpose==='purchase'?'purchase':'topup';
-    if(purpose==='topup')amount=parseTopup(amount);
-    else if(!Number.isSafeInteger(amount)||amount<1||amount>1000000)throw new Error('Harga QRIS harus 1–1.000.000 IDR.');
-    const orderId=options.orderId || 'maboyy-'+randomUUID();
-    db.prepare('INSERT INTO topups(order_id,discord_id,amount,purpose) VALUES(?,?,?,?)').run(orderId,userId,amount,purpose);
-    const status=await request('/charge',{payment_type:'qris',transaction_details:{order_id:orderId,gross_amount:amount},qris:{acquirer:'gopay'}});
-    validateStatus({order_id:orderId,amount},status);
-    const action=status.actions?.find(a=>a.name==='generate-qr-code');
-    let url;
-    try {url=new URL(action?.url);}catch {throw new Error(`QR belum tersedia. Cek status tagihan ${orderId}.`);}
-    if(url.protocol!=='https:' || !['api.midtrans.com','api.sandbox.midtrans.com'].includes(url.hostname))throw new Error('Alamat QR provider tidak valid.');
-    db.prepare('UPDATE topups SET qr_url=?,status=? WHERE order_id=?').run(url.href,status.transaction_status,orderId);
-    return db.prepare('SELECT * FROM topups WHERE order_id=?').get(orderId);
+    if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
+    amount=parseTopup(amount);const email=parseCustomerEmail(options.email);
+    const purpose=options.purpose==='purchase'?'purchase':'topup';const orderId=options.orderId || 'maboyy-'+randomUUID();
+    db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production) VALUES(?,?,?,?,'tripay',?,?)").run(orderId,userId,amount,purpose,channel,production?1:0);
+    const status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli OTP Maboyy').slice(0,100),customer_email:email,
+      order_items:[{name:purpose==='purchase'?'Pembelian OTP Maboyy':'Isi Saldo OTP Maboyy',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
+      signature:createHmac('sha256',privateKey).update(merchantCode+orderId+amount).digest('hex')});
+    // Reuse the same strict checks for the charge response and subsequent detail responses.
+    const p=apply(status);if(p.credited && p.purpose==='purchase')await onSettled(p);
+    if(!p.qr_url)throw new Error('QR TriPay belum tersedia. Cek tagihan '+orderId+' sebelum membuat transaksi baru.');return p;
   }
   function mount(app) {
-    app.post('/api/payments/midtrans/notification',async(req,res)=>{
-      if(!serverKey)return res.status(503).json({error:'Pembayaran belum aktif'});
-      if(!validSignature(req.body,serverKey))return res.status(403).json({error:'Signature tidak valid'});
-      const payment=db.prepare('SELECT * FROM topups WHERE order_id=?').get(req.body.order_id);
-      if(!payment)return res.status(404).json({error:'Tagihan tidak ditemukan'});
-      try {
-        // transaction_status is not included in the signature: read current status from Midtrans.
-        await refresh(payment.order_id);
-        res.json({ok:true});
-      } catch {res.status(502).json({error:'Konfirmasi provider belum tersedia; ulangi notifikasi'});}
+    app.post('/api/payments/tripay/callback',async(req,res)=>{
+      if(!configured)return res.status(503).json({success:false,message:'Pembayaran belum aktif'});
+      if(!validSignature(req.rawBody,req.get('X-Callback-Signature'),privateKey) || req.get('X-Callback-Event')!=='payment_status')return res.status(403).json({success:false,message:'Callback tidak valid'});
+      const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='tripay'").get(req.body.merchant_ref);
+      if(!p)return res.status(404).json({success:false,message:'Tagihan tidak ditemukan'});
+      if(typeof req.body.reference!=='string' || (p.provider_ref && p.provider_ref!==req.body.reference))return res.status(403).json({success:false,message:'Referensi tidak sesuai'});
+      try {await refresh(p.order_id,undefined,req.body.reference);res.json({success:true});}
+      catch {res.status(502).json({success:false,message:'Konfirmasi TriPay belum tersedia; ulangi callback'});}
     });
   }
-  return {create,refresh,mount,configured:Boolean(serverKey),production,
+  return {create,refresh,mount,configured,production,
     get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
-    recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC LIMIT 5").all(userId)};
+    recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5").all(userId)};
 }
-
 function createPaymentHandler({discord,payments}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const money=v=>Number(v).toLocaleString('id-ID')+' IDR';
@@ -104,7 +102,8 @@ function createPaymentHandler({discord,payments}) {
     if(id==='shop_topup') {
       await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo OTP Maboyy')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount')
-          .setLabel('Nominal IDR (1.000–1.000.000)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7))));
+          .setLabel('Nominal IDR (1.000–1.000.000)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('email').setLabel('Email untuk tagihan TriPay').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(254))));
       return true;
     }
     await i.deferReply({ephemeral:true});
@@ -118,9 +117,9 @@ function createPaymentHandler({discord,payments}) {
         const p=await payments.refresh(id.slice('topup_check:'.length),i.user.id);
         await i.editReply({content:p.credited?`✅ Pembayaran diterima. ${money(p.amount)} sudah masuk ke saldo Anda.`:`Status pembayaran: ${p.status}. Saldo ditambahkan setelah pembayaran terkonfirmasi.`});
       } else {
-        const p=await payments.create(i.user.id,parseTopup(i.fields.getTextInputValue('amount')));
+        const p=await payments.create(i.user.id,parseTopup(i.fields.getTextInputValue('amount')),{email:i.fields.getTextInputValue('email'),name:i.user.username});
         await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 QRIS • OTP Maboyy')
-          .setDescription(`Nominal: **${money(p.amount)}**\n${payments.production?'Bayar dengan memindai QRIS.':'MODE UJI — gunakan simulator Midtrans; bukan untuk pembayaran nyata.'}\nSaldo masuk otomatis setelah pembayaran dikonfirmasi.`)
+          .setDescription(`Saldo masuk: **${money(p.amount)}**\nBiaya QRIS pembeli: **${money(p.fee_customer || 0)}**\nTotal bayar: **${money(p.total_charge)}**\n${payments.production?'Bayar dengan memindai QRIS.':'MODE UJI — gunakan simulator TriPay; bukan untuk pembayaran nyata.'}\nSaldo masuk otomatis setelah pembayaran dikonfirmasi.`)
           .setImage(p.qr_url).setFooter({text:p.order_id})],components:[new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('topup_check:'+p.order_id).setLabel('Cek Pembayaran').setStyle(ButtonStyle.Success))]});
       }
@@ -128,4 +127,4 @@ function createPaymentHandler({discord,payments}) {
     return true;
   };
 }
-module.exports={validSignature,parseTopup,validateStatus,createPayments,createPaymentHandler};
+module.exports={validSignature,parseTopup,parseCustomerEmail,validateStatus,createPayments,createPaymentHandler};

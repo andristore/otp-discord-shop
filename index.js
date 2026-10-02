@@ -54,7 +54,7 @@ if (db.prepare("SELECT COUNT(*) c FROM products").get().c === 0) {
 
 const pricing=createPricing(db);
 const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel});
-app.use(express.json());
+app.use(express.json({verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
 let direct;
 const payments=createPayments({db,onSettled:payment=>direct.fulfill(payment)});
 direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel});
@@ -405,7 +405,7 @@ async function startDiscord(){
         const balance=await getBalance(id);
         const confirm=new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`confirm_buy:${quote.token}`).setLabel("Bayar Pakai Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`qris_buy:${quote.token}`).setLabel("Bayar Langsung QRIS").setEmoji("💳").setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`qris_buy:${quote.token}`).setLabel("Bayar Langsung QRIS").setEmoji("💳").setStyle(ButtonStyle.Primary).setDisabled(price<1000),
           new ButtonBuilder().setCustomId("shop_products").setLabel("Kembali").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
         );
         return i.editReply({
