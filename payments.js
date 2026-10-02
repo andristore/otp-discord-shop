@@ -65,12 +65,15 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     const status=await request('/transaction/detail?reference='+encodeURIComponent(reference),undefined,Boolean(p.production));
     const updated=apply(status);if(updated.credited && updated.purpose==='purchase' && status.status==='PAID')await onSettled(updated);return {...updated,providerStatus:status.status};
   }
+  const active=userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND gateway='tripay' AND credited=0 AND status IN ('creating','pending') ORDER BY created_at,rowid LIMIT 1").get(userId);
+  function assertCanCreate(userId){const p=active(userId);if(p){const e=new Error('Masih ada tagihan QRIS aktif. Buka Tagihan Aktif untuk melanjutkan pembayaran; jangan membayar ulang.');e.code='ACTIVE_INVOICE';throw e;}}
+  const reserve=db.transaction((orderId,userId,amount,purpose)=>{assertCanCreate(userId);db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production) VALUES(?,?,?,?,'tripay',?,?)").run(orderId,userId,amount,purpose,channel,production?1:0);});
   async function create(userId,amount,options={}) {
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
     const purpose=options.purpose==='purchase'?'purchase':'topup';
     amount=parseTopup(amount,purpose==='purchase'?1000:5000);const email=parseCustomerEmail(options.email);
     const orderId=options.orderId || 'maboyy-'+randomUUID();
-    db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production) VALUES(?,?,?,?,'tripay',?,?)").run(orderId,userId,amount,purpose,channel,production?1:0);
+    reserve(orderId,userId,amount,purpose);
     const status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli Hi, OTP Sms Virtual').slice(0,100),customer_email:email,
       order_items:[{name:purpose==='purchase'?'Pembelian Hi, OTP Sms Virtual':'Isi Saldo Hi, OTP Sms Virtual',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
       signature:createHmac('sha256',privateKey).update(merchantCode+orderId+amount).digest('hex')});
@@ -89,7 +92,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
       catch {res.status(502).json({success:false,message:'Konfirmasi TriPay belum tersedia; ulangi callback'});}
     });
   }
-  return {create,refresh,mount,configured,production,
+  return {create,refresh,mount,configured,production,active,assertCanCreate,
     get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
     recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5").all(userId)};
 }
@@ -103,19 +106,21 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
       await i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Isi Saldo • Hi, OTP Sms Virtual')
         .setDescription('Minimal isi saldo **5.000 IDR**.\n\n**QRIS Otomatis** — saldo masuk setelah pembayaran terverifikasi.\n**Manual** — hubungi admin dan kirim bukti pembayaran; saldo ditambahkan setelah diperiksa.')],components:[new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('topup_qris').setLabel('QRIS Otomatis').setStyle(ButtonStyle.Primary).setDisabled(!payments.configured),
-          new ButtonBuilder().setCustomId('topup_manual').setLabel('Manual').setStyle(ButtonStyle.Secondary))]});return true;
+          new ButtonBuilder().setCustomId('topup_manual').setLabel('Manual').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});return true;
     }
     if(id==='topup_manual') {
       const admins=(adminIds?adminIds():(env.ADMIN_DISCORD_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s))).slice(0,5);
       const instructions=String(manualInstructions?manualInstructions():env.MANUAL_TOPUP_INSTRUCTIONS || '').trim().slice(0,1100);
       await i.reply({ephemeral:true,allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💵 Isi Saldo Manual')
-        .setDescription(`Minimal isi saldo **5.000 IDR**.\n\n1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nUpload gambar bukti pembayaran ke Discord, salin tautan gambarnya, lalu tekan Ajukan Bukti Pembayaran. Admin memeriksa mutasi sebelum menyetujui. Tekan Status Pengajuan untuk melihat hasilnya.`)],components:[new ActionRowBuilder().addComponents(
+        .setDescription(`Minimal isi saldo **5.000 IDR**.\n\n1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nTekan Kirim Gambar Bukti untuk petunjuk upload langsung melalui /bukti. Admin memeriksa mutasi sebelum menyetujui. Tekan Status Pengajuan untuk melihat hasilnya.`)],components:[new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('shop_balance').setLabel('Cek Saldo').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('shop_topup').setLabel('Kembali').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId('manual_request').setLabel('Ajukan Bukti Pembayaran').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('manual_upload').setLabel('Kirim Gambar Bukti').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId('manual_request_list:0').setLabel('Status Pengajuan').setStyle(ButtonStyle.Secondary))]});return true;
     }
     if(!payments.configured) {await i.reply({ephemeral:true,content:'QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran. Anda tetap bisa memakai Isi Saldo → Manual.'});return true;}
+    if(id==='topup_qris' && payments.active?.(i.user.id)){await i.reply({ephemeral:true,content:'Masih ada tagihan QRIS aktif. Lanjutkan tagihan sebelumnya.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Buka Tagihan Aktif').setStyle(ButtonStyle.Primary))]});return true;}
     if(id==='topup_qris') {
       await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo QRIS • Hi, OTP Sms Virtual')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount')
@@ -140,7 +145,7 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
           .setImage(p.qr_url).setFooter({text:p.order_id})],components:[new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('topup_check:'+p.order_id).setLabel('Cek Pembayaran').setStyle(ButtonStyle.Success))]});
       }
-    }catch(e){await i.editReply({content:e.message+' Hubungi admin untuk memeriksa riwayat tagihan sebelum mencoba lagi.'});}
+    }catch(e){await i.editReply({content:e.message+' Hubungi admin jika status tagihan belum jelas.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
     return true;
   };
 }

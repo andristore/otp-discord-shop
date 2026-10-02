@@ -61,6 +61,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     if(!payments.configured)throw new Error('QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran.');
     const previous=db.prepare('SELECT * FROM direct_purchases WHERE quote_token=? AND discord_id=?').get(token,userId);
     if(previous)return {purchase:previous,payment:payments.get(previous.invoice_id,userId)};
+    payments.assertCanCreate?.(userId);
     const q=commerce.checkout(userId,token);
     require('./payments').parseCustomerEmail(customer.email);
     if(q.amount<1000 || q.amount>1000000)throw new Error('Harga produk di luar batas QRIS TriPay 1.000–1.000.000 IDR. Gunakan saldo bot untuk harga di bawah 1.000 IDR.');
@@ -105,6 +106,7 @@ function createDirectHandler({discord,direct,payments}) {
   async function handler(i) {
     const id=String(i.customId || '');
     if(!id.startsWith('qris_buy:') && !id.startsWith('direct_email:') && !id.startsWith('direct_check:') && id!=='direct_history')return false;
+    if(id.startsWith('qris_buy:') && payments.active?.(i.user.id)){await i.reply({ephemeral:true,content:'Masih ada tagihan QRIS aktif. Lanjutkan tagihan sebelumnya.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Buka Tagihan Aktif').setStyle(ButtonStyle.Primary))]});return true;}
     if(id.startsWith('qris_buy:')) {
       if(!payments.configured){await i.reply({ephemeral:true,content:'QRIS TriPay belum dikonfigurasi oleh admin.'});return true;}
       await i.showModal(new ModalBuilder().setCustomId('direct_email:'+id.slice(9)).setTitle('Email Tagihan QRIS')
@@ -130,7 +132,7 @@ function createDirectHandler({discord,direct,payments}) {
           .setDescription(`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payments.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator TriPay, bukan uang nyata.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran; OTP dikirim melalui DM saat masuk.`)
           .setImage(payment.qr_url).setFooter({text:purchase.invoice_id})],components:[checkRow(purchase.invoice_id)]});
       }
-    }catch(e){await i.editReply({content:e.message});}
+    }catch(e){await i.editReply({content:e.message,components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
     return true;
   }
   handler.status=status;

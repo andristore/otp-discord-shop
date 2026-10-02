@@ -83,6 +83,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
         new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Saldo Pembeli').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_transactions_menu').setLabel('Transaksi').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('admin_eff_summary').setLabel('Ringkasan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary)
       )]};
   }

@@ -31,7 +31,7 @@ function flowOptions(stage, state, catalog) {
   throw new Error('Tahap pembelian tidak valid.');
 }
 
-function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminView=false}) {
+function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminView=false,resolveFavorite}) {
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const searches=new Map();
   const searchKey=(user,stage,state)=>`${user}:${stage}:${state.app || '-'}`;
@@ -95,6 +95,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
       new ButtonBuilder().setCustomId(key('flow_page',stage,state,page+1)).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1));
     if(previous[stage])buttons.push(new ButtonBuilder().setCustomId(key('flow_page',previous[stage],state)).setLabel('Kembali').setStyle(ButtonStyle.Secondary));
     buttons.push(new ButtonBuilder().setCustomId(startId).setLabel('Mulai Ulang').setStyle(ButtonStyle.Primary));
+    if(!adminView && stage==='app')buttons.push(new ButtonBuilder().setCustomId('favorites').setLabel('Favorit Saya').setStyle(ButtonStyle.Secondary));
     if(adminView)buttons.push(new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Secondary));
     if(['app','country'].includes(stage))buttons.push(new ButtonBuilder().setCustomId(key('flow_search',stage,state)).setLabel(stage==='app'?'Cari Aplikasi':'Cari Negara').setStyle(ButtonStyle.Primary));
     for(let offset=0;offset<buttons.length;offset+=5)components.push(new ActionRowBuilder().addComponents(...buttons.slice(offset,offset+5)));
@@ -116,6 +117,12 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
       if(!p){await i.editReply({content:'Produk tidak tersedia lagi.'});return true;}
       await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`Katalog Provider • ${String(p.name || p.id).slice(0,180)}`)
         .setDescription(`Harga dasar: **${p.providerPrice.toLocaleString('id-ID')} IDR**\nHarga jual: **${p.price.toLocaleString('id-ID')} IDR**\nSelisih: **${(p.price-p.providerPrice).toLocaleString('id-ID')} IDR**\nStok: **${p.available || 0}**\nStatus: **${p.active?'Aktif':'Nonaktif'}**`)],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual Semua Layanan').setStyle(ButtonStyle.Primary))]});return true;
+    }
+    if(!adminView && originalId.startsWith('favorite_open:')){
+      await i.deferReply({ephemeral:true});
+      const f=resolveFavorite(i.user.id,originalId.split(':')[1]);
+      const state={app:f.app,country:f.country,operator:f.operator};
+      await i.editReply(render('product',state,optionsFor('product',state,await catalog('product',state))));return true;
     }
     const id=adminView?(originalId===startId?'shop_products':originalId.replace(/^provider_/,'')):originalId;
     if(id!=='shop_products' && !/^flow_(page|select|pick|search|search_submit):/.test(id))return false;

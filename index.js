@@ -21,6 +21,7 @@ const {createOperations,createOperationsHandler}=require("./operations");
 const {createServerAccess,createServerAccessHandler}=require("./server-access");
 const {createStaff,createStaffHandler}=require("./staff");
 const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
+const {createEfficiency,createEfficiencyHandler}=require("./efficiency");
 const {createStoreFeatures,createStoreFeatureHandler,REFUND_GUIDE}=require("./store-features");
 const app = express();
 const databasePath = process.env.DB_PATH || (process.env.RAILWAY_VOLUME_MOUNT_PATH
@@ -273,7 +274,11 @@ async function startDiscord(){
   if(!process.env.DISCORD_TOKEN) return console.log("DISCORD_TOKEN belum diisi; bot tidak dijalankan.");
   const commands=[
     new SlashCommandBuilder().setName("shop").setDescription("Buka panel toko OTP"),
-    new SlashCommandBuilder().setName("admin").setDescription("Buka panel admin toko OTP")
+    new SlashCommandBuilder().setName("admin").setDescription("Buka panel admin toko OTP"),
+    new SlashCommandBuilder().setName('bukti').setDescription('Ajukan isi saldo manual dengan gambar bukti')
+      .addIntegerOption(o=>o.setName('nominal').setDescription('Rupiah tanpa titik, minimal 5000').setMinValue(5000).setMaxValue(1000000).setRequired(true))
+      .addAttachmentOption(o=>o.setName('gambar').setDescription('Gambar bukti PNG, JPG, atau WebP').setRequired(true))
+      .addStringOption(o=>o.setName('catatan').setDescription('Pengirim / waktu pembayaran').setMaxLength(200))
   ].map(x=>x.toJSON());
   const rest=new REST({version:"10"}).setToken(process.env.DISCORD_TOKEN);
   if(process.env.DISCORD_CLIENT_ID) await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),{body:commands});
@@ -306,8 +311,10 @@ async function startDiscord(){
     );
   }
 
+  const efficiency=createEfficiency({db,staff});
+  const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id)});
-  const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing});
+  const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:()=>staff.ids()});
   const handleStaff=createStaffHandler({discord:require("discord.js"),staff,resolveUser:id=>client.users.fetch(id)});
@@ -325,9 +332,10 @@ async function startDiscord(){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:[mainRow()]});
       }
       if(await handleStoreFeatures(i))return;
-      if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:)/.test(String(i.customId || ''))){
+      if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:)/.test(String(i.customId || ''))){
         return i.reply({ephemeral:true,content:'🔧 Toko sedang maintenance. Pembelian baru dihentikan sementara. Pesanan, OTP, dan tagihan sebelumnya tetap tersedia.'});
       }
+      if(await handleEfficiency(i))return;
       if(await handleStaff(i))return;
       if(await handleServerAccess(i))return;
       if(await handleOperations(i)) return;
@@ -366,7 +374,7 @@ async function startDiscord(){
           });
         }
 
-        if(i.customId==="shop_orders"){
+        if(i.customId==="shop_order_history"){
           const rows=db.prepare(`SELECT o.id,o.product_name,o.provider_order_id,o.phone,o.status,o.amount,o.created_at,
             p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id
             WHERE o.discord_id=? ORDER BY o.id DESC LIMIT 10`).all(id);
@@ -458,7 +466,7 @@ async function startDiscord(){
               {name:"Stok",value:`**${p.available}**`,inline:true}
             )
             .setDescription("Pastikan produk dan harga terbaru sudah benar sebelum melanjutkan.\n\nRefund harga produk masuk ke saldo bot, termasuk pembayaran QRIS. Biaya QRIS tidak ikut dikembalikan. Pesanan yang sudah menerima OTP tidak dapat dibatalkan. Tekan Panduan Refund untuk detail.")],
-          components:[confirm]
+          components:[confirm,new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('favorite_save:'+quote.token).setLabel('Simpan Favorit').setStyle(ButtonStyle.Secondary))]
         });
       }
     } catch(e){
