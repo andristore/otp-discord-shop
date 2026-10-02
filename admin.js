@@ -47,15 +47,21 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const amount=value=>`${Number(value || 0).toLocaleString('id-ID')} IDR`;
-  function menu(title,description,choices) {
+  function menu(title,description,choices,back='admin_home') {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(title).setDescription(description)],components:[
-      ...Array.from({length:Math.ceil(choices.length/5)},(_,r)=>new ActionRowBuilder().addComponents(...choices.slice(r*5,r*5+5).map(([id,label])=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(ButtonStyle.Primary)))),
-      new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_home').setLabel('Kembali').setStyle(ButtonStyle.Secondary))
+      ...Array.from({length:Math.ceil(choices.length/5)},(_,r)=>new ActionRowBuilder().addComponents(...choices.slice(r*5,r*5+5).map(([id,label,style=ButtonStyle.Primary])=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style)))),
+      new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(back).setLabel('Kembali').setStyle(ButtonStyle.Secondary))
     ]};
   }
   function section(id) {
-    if(id==='admin_catalog_menu')return menu('🏪 Toko','Katalog, harga jual, dan promo.',[
-      ['provider_catalog','Katalog Provider'],['admin_manual_catalog:0','Produk Manual'],['admin_manual_add','Tambah Produk Manual'],['admin_pricing','Harga OTP Provider'],['admin_tools_coupons:0','Voucher']]);
+    if(id==='admin_catalog_menu')return menu('🏪 Toko','Pilih kategori yang ingin dikelola.\n\n📱 OTP Provider — layanan SMSCode dan markup harga.\n📦 Produk Lainnya — produk digital, stok, dan harga jual.\n🎟️ Promo — voucher diskon.',[
+      ['admin_catalog_provider','📱 OTP Provider'],['admin_catalog_manual','📦 Produk Lainnya'],['admin_catalog_promo','🎟️ Promo']]);
+    if(id==='admin_catalog_provider')return menu('📱 OTP Provider','Periksa katalog SMSCode atau atur markup harga jual OTP.',[
+      ['provider_catalog','Lihat Layanan',ButtonStyle.Secondary],['admin_pricing','Atur Harga OTP']], 'admin_catalog_menu');
+    if(id==='admin_catalog_manual')return menu('📦 Produk Lainnya','Pilih Kelola Produk untuk mengubah data, stok, harga jual, status, atau menghapus produk.',[
+      ['admin_manual_catalog:0','Kelola Produk'],['admin_manual_add','Tambah Produk',ButtonStyle.Success]], 'admin_catalog_menu');
+    if(id==='admin_catalog_promo')return menu('🎟️ Promo','Buat voucher dan atur status promo toko.',[
+      ['admin_tools_coupons:0','Kelola Voucher']], 'admin_catalog_menu');
     if(id==='admin_balance_menu')return menu('👥 Pembeli','Akun, saldo, dan bantuan pembeli.',[
       ['admin_balances:0','Daftar Saldo'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo'],['admin_balance_history','Riwayat Saldo Manual'],['admin_tools_tickets:0','Tiket Bantuan']]);
     if(id==='admin_transactions_menu')return menu('💳 Pembayaran','Verifikasi pembayaran dan pengajuan.',[
@@ -146,7 +152,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(await buyerBalances(Number(i.customId.split(':')[1])));return true;
       }
-      if(['admin_catalog_menu','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu'].includes(i.customId)) {
+      if(['admin_catalog_menu','admin_catalog_provider','admin_catalog_manual','admin_catalog_promo','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu'].includes(i.customId)) {
         await i.update(section(i.customId));return true;
       }
       if(i.customId==='admin_topup_history' || i.customId==='admin_direct_history') {
