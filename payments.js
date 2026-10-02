@@ -92,15 +92,29 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
     recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5").all(userId)};
 }
-function createPaymentHandler({discord,payments}) {
+function createPaymentHandler({discord,payments,env=process.env}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const money=v=>Number(v).toLocaleString('id-ID')+' IDR';
   return async function handlePayment(i) {
     const id=String(i.customId || '');
-    if(id!=='shop_topup' && id!=='topup_amount' && id!=='topup_history' && !id.startsWith('topup_check:'))return false;
-    if(!payments.configured) {await i.reply({ephemeral:true,content:'QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran.'});return true;}
+    if(!['shop_topup','topup_qris','topup_manual','topup_amount','topup_history'].includes(id) && !id.startsWith('topup_check:'))return false;
     if(id==='shop_topup') {
-      await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo OTP Maboyy')
+      await i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Isi Saldo • OTP Maboyy')
+        .setDescription('Pilih metode isi saldo:\n\n**QRIS Otomatis** — saldo masuk setelah pembayaran terverifikasi.\n**Manual** — hubungi admin dan kirim bukti pembayaran; saldo ditambahkan setelah diperiksa.')],components:[new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('topup_qris').setLabel('QRIS Otomatis').setStyle(ButtonStyle.Primary).setDisabled(!payments.configured),
+          new ButtonBuilder().setCustomId('topup_manual').setLabel('Manual').setStyle(ButtonStyle.Secondary))]});return true;
+    }
+    if(id==='topup_manual') {
+      const admins=(env.ADMIN_DISCORD_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s)).slice(0,5);
+      const instructions=(env.MANUAL_TOPUP_INSTRUCTIONS || '').trim().slice(0,1100);
+      await i.reply({ephemeral:true,allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💵 Isi Saldo Manual')
+        .setDescription(`1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nSaldo manual masuk setelah disetujui admin. Tekan Saldo untuk mengecek hasilnya.`)],components:[new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('shop_balance').setLabel('Cek Saldo').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('shop_topup').setLabel('Kembali').setStyle(ButtonStyle.Secondary))]});return true;
+    }
+    if(!payments.configured) {await i.reply({ephemeral:true,content:'QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran. Anda tetap bisa memakai Isi Saldo → Manual.'});return true;}
+    if(id==='topup_qris') {
+      await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo QRIS • OTP Maboyy')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount')
           .setLabel('Nominal IDR (1.000–1.000.000)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7)),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('email').setLabel('Email untuk tagihan TriPay').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(254))));
@@ -123,7 +137,7 @@ function createPaymentHandler({discord,payments}) {
           .setImage(p.qr_url).setFooter({text:p.order_id})],components:[new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('topup_check:'+p.order_id).setLabel('Cek Pembayaran').setStyle(ButtonStyle.Success))]});
       }
-    }catch(e){await i.editReply({content:e.message+' Gunakan Riwayat Isi Saldo untuk mengecek tagihan sebelum mencoba lagi.'});}
+    }catch(e){await i.editReply({content:e.message+' Hubungi admin untuk memeriksa riwayat tagihan sebelum mencoba lagi.'});}
     return true;
   };
 }

@@ -8,7 +8,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel}) {
     for(const [key,c] of checkouts)if(c.expires<Date.now())checkouts.delete(key);
     const providerAmount=Number(product.price?.canonical_amount ?? product.price);
     const amount=pricing.price(providerAmount);const token=randomUUID();
-    checkouts.set(token,{userId,productId:Number(product.id),providerAmount,amount,name:product.name || `Produk ${product.id}`,platformId:product.platform_id,countryId:product.country_id,expires:Date.now()+300000});
+    checkouts.set(token,{userId,productId:Number(product.id),providerAmount,amount,name:product.name || `Produk ${product.id}`,platformId:product.platform_id,countryId:product.country_id,operatorId:product.operator_id ?? null,expires:Date.now()+300000});
     return {token,amount,providerAmount};
   }
   async function buy(userId,token) {

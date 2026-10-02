@@ -10,6 +10,13 @@ function flowOptions(stage, state, catalog) {
   const local=matching.filter(p=>String(p.country_id)===state.country);
   if(stage==='operator') {
     const choices=new Map();
+    // Products without operator_id are the Any inventory, not all carriers.
+    // The dedicated operator endpoint is authoritative for selectable carriers.
+    for(const o of operators) {
+      const value=o.operator_id==null?'any':String(o.operator_id);
+      choices.set(value,{value,label:o.name || o.local_name || (value==='any'?'Otomatis (Any)':`Operator ${value}`)});
+    }
+    if(choices.size) return [...choices.values()];
     for(const p of local) {
       const value=p.operator_id==null?'any':String(p.operator_id);
       const meta=operators.find(o=>(o.operator_id==null?'any':String(o.operator_id))===value);
@@ -48,6 +55,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
     if(stage==='app') return {services:await list('/catalog/services'),countries:[],products:[],operators:[]};
     const filters={platform_id:state.app};
     if(state.country && stage!=='country')filters.country_id=state.country;
+    if(stage==='product' && state.operator && state.operator!=='any')filters.operator_id=state.operator;
     const [countries,result,operators]=await Promise.all([
       stage==='country'?list('/catalog/countries'):Promise.resolve([]),
       smsCatalogProducts(filters),
@@ -70,7 +78,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
     const visible=options.slice(page*20,(page+1)*20);
     for(let offset=0;offset<visible.length;offset+=5) {
       components.push(new ActionRowBuilder().addComponents(...visible.slice(offset,offset+5).map(o=>
-        new ButtonBuilder().setCustomId(stage==='product'?`${productPrefix}:${o.value}:${state.app}:${state.country}`:`${key('flow_pick',stage,state,page)}:${o.value}`)
+        new ButtonBuilder().setCustomId(stage==='product'?`${productPrefix}:${o.value}:${state.app}:${state.country}${state.operator && state.operator!=='any'?':'+state.operator:''}`:`${key('flow_pick',stage,state,page)}:${o.value}`)
           .setLabel(String(stage==='product'?o.description:o.label).slice(0,80))
           .setStyle(ButtonStyle.Secondary)
           .setDisabled(!adminView && stage==='product' && o.description.includes('Tidak tersedia'))
@@ -97,8 +105,8 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
     }
     if(adminView && originalId.startsWith('provider_product:')) {
       await i.deferReply({ephemeral:true});
-      const [,pid,app,country]=originalId.split(':');
-      const data=await catalog('product',{app,country});const p=data.products.find(p=>String(p.id)===pid);
+      const [,pid,app,country,operator]=originalId.split(':');
+      const data=await catalog('product',{app,country,operator});const p=data.products.find(p=>String(p.id)===pid && (p.operator_id==null?'any':String(p.operator_id))===(operator || 'any'));
       if(!p){await i.editReply({content:'Produk tidak tersedia lagi.'});return true;}
       await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`Katalog Provider • ${String(p.name || p.id).slice(0,180)}`)
         .setDescription(`Harga dasar: **${p.providerPrice.toLocaleString('id-ID')} IDR**\nHarga jual: **${p.price.toLocaleString('id-ID')} IDR**\nSelisih: **${(p.price-p.providerPrice).toLocaleString('id-ID')} IDR**\nStok: **${p.available || 0}**\nStatus: **${p.active?'Aktif':'Nonaktif'}**`)],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual Semua Layanan').setStyle(ButtonStyle.Primary))]});return true;

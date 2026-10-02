@@ -43,19 +43,29 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const amount=value=>`${Number(value || 0).toLocaleString('id-ID')} IDR`;
+  function menu(title,description,choices) {
+    return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(title).setDescription(description)],components:[
+      new ActionRowBuilder().addComponents(...choices.map(([id,label])=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(ButtonStyle.Primary))),
+      new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_home').setLabel('Kembali').setStyle(ButtonStyle.Secondary))
+    ]};
+  }
+  function section(id) {
+    if(id==='admin_catalog_menu')return menu('📦 Katalog','Pilih katalog atau periksa koneksi provider.',[
+      ['provider_catalog','Katalog Provider'],['admin_products:0','Produk Manual'],['admin_add','Tambah Produk'],['admin_health','Koneksi & Saldo Provider']]);
+    if(id==='admin_balance_menu')return menu('💰 Saldo Pembeli','Tambahkan saldo setelah memeriksa pembayaran pembeli.',[
+      ['admin_balance_add','Tambah Saldo Pembeli'],['admin_balance_history','Riwayat Saldo Manual']]);
+    if(id==='admin_transactions_menu')return menu('🧾 Transaksi','Lihat riwayat pembayaran dan transaksi yang perlu diperiksa.',[
+      ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_payment_issues','Pembayaran Perlu Diperiksa']]);
+  }
   function home() {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
-      .setDescription('Katalog Provider menampilkan layanan SMSCode, harga dasar, harga jual, dan stok. Atur Harga Jual berlaku untuk semua layanan. Produk Manual adalah katalog terpisah; tidak dipakai oleh Beli OTP.')],components:[
+      .setDescription('Pilih kategori untuk mengelola OTP Maboyy.')],components:[
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('provider_catalog').setLabel('Katalog Provider').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('admin_products:0').setLabel('Produk Manual').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('admin_add').setLabel('Tambah Produk').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('admin_health').setLabel('Koneksi & Saldo Provider').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('admin_catalog_menu').setLabel('Katalog').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_pricing').setLabel('Harga Jual').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Saldo Pembeli').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_transactions_menu').setLabel('Transaksi').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('admin_balance_add').setLabel('Tambah Saldo Pembeli').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('admin_balance_history').setLabel('Riwayat Saldo Manual').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('admin_payment_issues').setLabel('Pembayaran Perlu Diperiksa').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary)
       )]};
   }
@@ -108,6 +118,16 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser}) {
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(i.isButton()) {
+      if(['admin_catalog_menu','admin_balance_menu','admin_transactions_menu'].includes(i.customId)) {
+        await i.update(section(i.customId));return true;
+      }
+      if(i.customId==='admin_topup_history' || i.customId==='admin_direct_history') {
+        const topup=i.customId==='admin_topup_history';
+        const rows=db.prepare(topup?"SELECT * FROM topups WHERE purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5":"SELECT * FROM direct_purchases ORDER BY created_at DESC,rowid DESC LIMIT 5").all();
+        const title=topup?'Riwayat Isi Saldo QRIS':'Riwayat QRIS Beli';
+        const content=rows.length?rows.map(r=>topup?`Tagihan: ${r.order_id}\nPembeli: ${r.discord_id}\nSaldo: ${amount(r.amount)} • Status: ${r.status}\nSaldo masuk: ${r.credited?'Ya':'Belum'} • ${r.created_at} UTC`:`Tagihan: ${r.invoice_id}\nPembeli: ${r.discord_id}\nHarga: ${amount(r.amount)} • Status: ${r.state}\nOrder: ${r.provider_order_id || '-'} • ${r.created_at} UTC`).join('\n\n'):'Belum ada transaksi.';
+        await i.reply({ephemeral:true,content:`**${title} — 5 transaksi terakhir**\n\n${content}`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Primary))]});return true;
+      }
       if(i.customId==='admin_balance_add') {
         const modal=new ModalBuilder().setCustomId('admin_balance_save').setTitle('Tambah Saldo Pembeli');
         for(const [key,label,max] of [['buyer','ID Discord pengguna pembeli',20],['amount','Tambahkan rupiah (tanpa titik/koma)',7],['note','Catatan / referensi pembayaran',200]]) {

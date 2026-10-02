@@ -7,6 +7,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     provider_order_id TEXT,error TEXT,notified INTEGER NOT NULL DEFAULT 0,polled_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
+  if(!db.prepare('PRAGMA table_info(direct_purchases)').all().some(c=>c.name==='operator_id'))db.exec('ALTER TABLE direct_purchases ADD COLUMN operator_id INTEGER');
   // A provider request interrupted by a restart must be reconciled by admin, never sent twice.
   db.prepare("UPDATE direct_purchases SET state='review',error='Proses provider terputus saat restart; periksa order SMSCode sebelum menyelesaikan tagihan.' WHERE state='processing'").run();
   let notifier;const notifying=new Set();
@@ -30,9 +31,9 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     const claim=db.prepare("UPDATE direct_purchases SET state='processing' WHERE invoice_id=? AND state='pending'").run(row.invoice_id);
     if(!claim.changes)return get(row.invoice_id,row.discord_id);
     let products;
-    try {products=await smsCatalogProducts({platform_id:row.platform_id,country_id:row.country_id});if(!Array.isArray(products.data))throw new Error('Katalog tidak valid');}
+    try {const filters={platform_id:row.platform_id,country_id:row.country_id};if(row.operator_id!=null)filters.operator_id=String(row.operator_id);products=await smsCatalogProducts(filters);if(!Array.isArray(products.data))throw new Error('Katalog tidak valid');}
     catch {db.prepare("UPDATE direct_purchases SET state='pending',error='Menunggu katalog provider' WHERE invoice_id=?").run(row.invoice_id);return get(row.invoice_id,row.discord_id);}
-    const product=products.data.find(p=>Number(p.id)===row.product_id);
+    const product=products.data.find(p=>Number(p.id)===row.product_id && (p.operator_id==null?null:String(p.operator_id))===(row.operator_id==null?null:String(row.operator_id)));
     if(!product || !product.active || Number(product.available)<=0 || Number(product.price?.canonical_amount ?? product.price)!==row.provider_amount) {
       refund(row,'Produk habis/nonaktif atau harga provider berubah. Pembayaran dikembalikan ke saldo bot.');
     } else {
@@ -63,11 +64,11 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     require('./payments').parseCustomerEmail(customer.email);
     if(q.amount<1000 || q.amount>1000000)throw new Error('Harga produk di luar batas QRIS TriPay 1.000–1.000.000 IDR. Gunakan saldo bot untuk harga di bawah 1.000 IDR.');
     const invoiceId='maboyy-buy-'+randomUUID();
-    db.prepare('INSERT INTO direct_purchases(invoice_id,quote_token,discord_id,product_id,platform_id,country_id,name,provider_amount,amount) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(invoiceId,token,userId,q.productId,String(q.platformId),String(q.countryId),q.name,q.providerAmount,q.amount);
+    db.prepare('INSERT INTO direct_purchases(invoice_id,quote_token,discord_id,product_id,platform_id,country_id,name,provider_amount,amount,operator_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(invoiceId,token,userId,q.productId,String(q.platformId),String(q.countryId),q.name,q.providerAmount,q.amount,q.operatorId ?? null);
     commerce.checkout(userId,token,true);
     try {const payment=await payments.create(userId,q.amount,{...customer,purpose:'purchase',orderId:invoiceId});return {purchase:get(invoiceId,userId),payment};}
-    catch {throw new Error('Tagihan '+invoiceId+' belum menampilkan QR. Buka Riwayat QRIS Beli sebelum membuat tagihan lain.');}
+    catch {throw new Error('Tagihan '+invoiceId+' belum menampilkan QR. Hubungi admin untuk memeriksa Riwayat QRIS Beli sebelum membuat tagihan lain.');}
   }
   async function refresh(id,userId) {
     const row=get(id,userId);if(!row)throw new Error('Tagihan tidak ditemukan.');

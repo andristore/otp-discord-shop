@@ -98,7 +98,7 @@ const catalogCache = new Map();
 const catalogLoading = new Map();
 
 async function smsCatalogProducts(filters={}){
-  const query=['platform_id','country_id'].filter(key=>filters[key]!=null)
+  const query=['platform_id','country_id','operator_id'].filter(key=>filters[key]!=null)
     .map(key=>`${key}=${encodeURIComponent(filters[key])}`).join('&');
   const cached=catalogCache.get(query);
   if(cached && Date.now() < cached.expiresAt) return cached.result;
@@ -262,7 +262,7 @@ async function startDiscord(){
     return db.prepare("SELECT balance FROM users WHERE discord_id=?").get(id).balance;
   }
 
-  function shopEmbed(balance, title="OTP Maboyy"){
+  function shopEmbed(title="OTP Maboyy"){
     return new EmbedBuilder()
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
@@ -271,7 +271,6 @@ async function startDiscord(){
         "Pilih menu di bawah untuk mulai bertransaksi.\n" +
         "🔒 Transaksi diproses otomatis melalui provider."
       )
-      .addFields({name:"💰 Saldo Anda",value:`**${money(balance)}**`,inline:true})
       .setFooter({text:"OTP Maboyy • Automated Service"});
   }
 
@@ -280,7 +279,7 @@ async function startDiscord(){
       new ButtonBuilder().setCustomId("shop_products").setLabel("Beli OTP").setEmoji("🛒").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("shop_balance").setLabel("Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("shop_orders").setLabel("Pesanan").setEmoji("📦").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo QRIS").setEmoji("💳").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary)
     );
   }
@@ -301,8 +300,7 @@ async function startDiscord(){
       if(await handleFlow(i)) return;
 
       if(i.isChatInputCommand() && i.commandName==="shop"){
-        const balance=await getBalance(id);
-        return i.reply({embeds:[shopEmbed(balance)],components:[mainRow(),new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("topup_history").setLabel("Riwayat Isi Saldo").setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId("direct_history").setLabel("Riwayat QRIS Beli").setStyle(ButtonStyle.Secondary))]});
+        return i.reply({embeds:[shopEmbed()],components:[mainRow()]});
       }
 
       if(i.isButton()){
@@ -397,8 +395,10 @@ async function startDiscord(){
         await i.deferReply({ephemeral:true});
         const pid=Number(i.isButton()?i.customId.split(":")[1]:i.values[0]);
         const parts=i.isButton()?i.customId.split(':'):[];
-        const data=await smsCatalogProducts(parts.length>=4?{platform_id:parts[2],country_id:parts[3]}:{});
-        const p=(data.data||[]).find(x=>Number(x.id)===pid);
+        const filters=parts.length>=4?{platform_id:parts[2],country_id:parts[3]}:{};
+        if(parts[4] && parts[4]!=='any')filters.operator_id=parts[4];
+        const data=await smsCatalogProducts(filters);
+        const p=(data.data||[]).find(x=>Number(x.id)===pid && (parts.length<4 || ((x.operator_id==null?'any':String(x.operator_id))===(parts[4] || 'any') && String(x.platform_id)===parts[2] && String(x.country_id)===parts[3])));
         if(!p || !productAvailable(p)) return i.editReply({content:"Produk sedang tidak tersedia. Pilih layanan lain dari katalog."});
         const quote=commerce.quote(id,p);
         const price=quote.amount;
