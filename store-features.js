@@ -1,3 +1,4 @@
+const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
 const {createManualBalance}=require('./admin');
 const REFUND_GUIDE='**Pembatalan & refund**\n• Pesanan dapat dibatalkan selama belum menerima OTP dan pembatalan diterima provider.\n• Setelah OTP diterima atau pesanan selesai, pembatalan tidak tersedia.\n• Refund harga produk masuk ke **saldo bot**, termasuk pembelian langsung QRIS; bukan ke rekening/e-wallet. Biaya QRIS tidak termasuk refund.\n• Pembayaran yang hasil pesanan providernya belum jelas diperiksa admin. Jangan membayar ulang.\n• Nomor virtual tidak menjamin aplikasi menerima nomor tersebut. Simpan ID pesanan saat meminta bantuan.';
 
@@ -45,9 +46,9 @@ function createStoreFeatures({db,staff,sendDM,now=()=>Date.now()}){
   async function poll(){if(!sendDM || polling)return;polling=true;try{
     for(const adminId of staff.ids())for(const r of db.prepare("SELECT r.* FROM manual_topup_requests r WHERE r.status='pending' AND NOT EXISTS(SELECT 1 FROM manual_topup_notifications n WHERE n.request_id=r.id AND n.admin_id=?) ORDER BY r.created_at,r.id LIMIT 20").all(adminId)){
       if(db.prepare('SELECT 1 FROM manual_topup_notifications WHERE request_id=? AND admin_id=?').get(r.id,adminId))continue;
-      try{await sendDM(adminId,`💵 Pengajuan isi saldo manual\nID: ${r.id}\nPembeli: ${r.discord_id}\nNominal: ${r.amount.toLocaleString('id-ID')} IDR\nBuka /admin → Saldo Pembeli → Pengajuan Manual. Cocokkan dengan mutasi rekening sebelum menyetujui.`);db.prepare('INSERT OR IGNORE INTO manual_topup_notifications VALUES(?,?)').run(r.id,adminId);}catch{}
+      try{await sendDM(adminId,`💵 Pengajuan isi saldo manual\nID: ${r.id}\nPembeli: ${buyerLabel(r.discord_id)}\nNominal: ${r.amount.toLocaleString('id-ID')} IDR\nBuka /admin → Pembayaran → Pengajuan Manual. Cocokkan dengan mutasi rekening sebelum menyetujui.`);db.prepare('INSERT OR IGNORE INTO manual_topup_notifications VALUES(?,?)').run(r.id,adminId);}catch{}
     }
-    for(const r of db.prepare("SELECT * FROM manual_topup_requests WHERE status<>'pending' AND result_notified=0 LIMIT 20").all())try{await sendDM(r.discord_id,`Pengajuan saldo ${r.id}: ${r.status==='approved'?'DISETUJUI — '+r.amount.toLocaleString('id-ID')+' IDR masuk ke saldo':'DITOLAK'}\nCatatan admin: ${r.decision_note}\nCek Isi Saldo → Manual → Status Pengajuan.`);db.prepare('UPDATE manual_topup_requests SET result_notified=1 WHERE id=?').run(r.id);}catch{}
+    for(const r of db.prepare("SELECT * FROM manual_topup_requests WHERE status<>'pending' AND result_notified=0 LIMIT 20").all())try{await sendDM(r.discord_id,`Pembeli: ${buyerLabel(r.discord_id)}\nPengajuan saldo ${r.id}: ${r.status==='approved'?'DISETUJUI — '+r.amount.toLocaleString('id-ID')+' IDR masuk ke saldo':'DITOLAK'}\nCatatan admin: ${r.decision_note}\nCek Isi Saldo → Manual → Status Pengajuan.`);db.prepare('UPDATE manual_topup_requests SET result_notified=1 WHERE id=?').run(r.id);}catch{}
   }finally{polling=false;}}
   return {maintenance,assertOpen,setMaintenance,submit,get,requests,decide,repeat,report,poll};
 }
@@ -85,7 +86,8 @@ function createStoreFeatureHandler({discord,features,staff}){
       }
       if(id.startsWith('manual_request_detail:') || id.startsWith('admin_store_detail:')){
         const r=features.get(id.split(':')[1],i.user.id,admin?i.user.id:undefined);
-        await i.editReply({content:`Pengajuan: ${r.id}\nPembeli: ${r.discord_id}\nNominal: ${money(r.amount)}\nStatus: ${r.status}\nCatatan: ${r.note || '-'}\nBukti: ${r.proof_url}\nCatatan admin: ${r.decision_note || '-'}${admin?'\n\nPeriksa mutasi rekening/e-wallet, pengirim dan nominal. Gambar bukti saja tidak cukup untuk persetujuan.':''}`,allowedMentions:{parse:[]},components:[row(admin && r.status==='pending'?[[`admin_store_approve:${r.id}`,'Setujui'],[`admin_store_reject:${r.id}`,'Tolak'],['admin_store_requests:0','Kembali']]:[[admin?'admin_store_requests:0':'manual_request_list:0','Kembali']])]});return true;
+        await hydrateBuyers([r.discord_id]);
+        await i.editReply({content:`Pengajuan: ${r.id}\nPembeli: ${buyerLabel(r.discord_id)}\nNominal: ${money(r.amount)}\nStatus: ${r.status}\nCatatan: ${r.note || '-'}\nBukti: ${r.proof_url}\nCatatan admin: ${r.decision_note || '-'}${admin?'\n\nPeriksa mutasi rekening/e-wallet, pengirim dan nominal. Gambar bukti saja tidak cukup untuk persetujuan.':''}`,allowedMentions:{parse:[]},components:[row(admin && r.status==='pending'?[[`admin_store_approve:${r.id}`,'Setujui'],[`admin_store_reject:${r.id}`,'Tolak'],['admin_store_requests:0','Kembali']]:[[admin?'admin_store_requests:0':'manual_request_list:0','Kembali']])]});return true;
       }
       if(/^admin_store_save(approve|reject):/.test(id)){
         const approve=id.startsWith('admin_store_saveapprove:');const r=features.decide({id:id.split(':')[1],adminId:i.user.id,approve,note:i.fields.getTextInputValue('note'),confirmation:approve?i.fields.getTextInputValue('confirmation'):''});

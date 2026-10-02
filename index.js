@@ -11,6 +11,7 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle
 } = require("discord.js");
 
+const {createBuyerProfiles,configureBuyerProfiles,rememberBuyer}=require("./buyer-profiles");
 const {createAdminHandler,configureAdminAccess}=require("./admin");
 const {createPurchaseFlow}=require("./purchase-flow");
 const {createPayments,createPaymentHandler}=require("./payments");
@@ -314,6 +315,8 @@ async function startDiscord(){
 
   const efficiency=createEfficiency({db,staff});
   const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
+  const buyerProfiles=createBuyerProfiles({db,resolveUser:id=>client.users.fetch(id)});
+  configureBuyerProfiles(buyerProfiles);
   commerce.setCoupons(toolkit.coupons);
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
@@ -331,6 +334,7 @@ async function startDiscord(){
     try {
       const id=i.user.id;
       if(await serverAccess.gate(i))return;
+      rememberBuyer(i.user);
       addHomeNavigation(i);
       if(i.isButton() && i.customId===HOME_ID){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:[mainRow()]});

@@ -1,3 +1,4 @@
+const {buyerLabel}=require('./buyer-profiles');
 const {randomUUID}=require('node:crypto');
 function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen=()=>{}}) {
   db.exec(`CREATE TABLE IF NOT EXISTS direct_purchases (
@@ -98,7 +99,8 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
 function createDirectHandler({discord,direct,payments}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const money=v=>Number(v).toLocaleString('id-ID')+' IDR';
-  function status(row) {
+  function status(row) {const p=statusBody(row);return {...p,content:`Pembeli: ${buyerLabel(row.discord_id)}\n\n${p.content}`};}
+  function statusBody(row) {
     const order=direct.order(row);
     if(row.state==='fulfilled' && order?.refunded)return {content:`Pesanan ${order.provider_order_id} dibatalkan. ${money(order.amount)} sudah dikembalikan ke saldo bot.`,components:[]};
     if(row.state==='fulfilled' && order)return {content:`✅ Pembayaran diterima dan pesanan berhasil.\nProduk: **${row.name}**\nHarga: **${money(row.amount)}**\nNomor: **${order.phone}**\nOrder: ${order.provider_order_id}`,components:[new ActionRowBuilder().addComponents(

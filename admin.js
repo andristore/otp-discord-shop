@@ -1,3 +1,4 @@
+const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
 let staffAccess;
 function configureAdminAccess(access) {staffAccess=access;}
 function isDiscordAdmin(id, configured=process.env.ADMIN_DISCORD_IDS || '') {
@@ -64,13 +65,14 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Akses, backup, dan pemantauan toko.',[
       ['admin_staff_access','Izin & Admin'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Koneksi Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
   }
-  function buyerBalances(requested=0) {
+  async function buyerBalances(requested=0) {
     const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();
     const pages=Math.max(1,Math.ceil(summary.count/10));
     const page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1);
     const rows=db.prepare('SELECT discord_id,balance FROM users ORDER BY balance DESC, discord_id ASC LIMIT 10 OFFSET ?').all(page*10);
+    await hydrateBuyers(rows.map(r=>r.discord_id));
     return {content:'',allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💰 Daftar Saldo Pembeli')
-      .setDescription(`Total saldo akun: **${amount(summary.total)}**\n\n${rows.length?rows.map((r,n)=>`${page*10+n+1}. <@${r.discord_id}>\nID: ${r.discord_id}\nSaldo: **${amount(r.balance)}**`).join('\n\n'):'Belum ada akun pembeli tersimpan.'}`)
+      .setDescription(`Total saldo akun: **${amount(summary.total)}**\n\n${rows.length?rows.map((r,n)=>`${page*10+n+1}. ${buyerLabel(r.discord_id)}\nID: ${r.discord_id}\nSaldo: **${amount(r.balance)}**`).join('\n\n'):'Belum ada akun pembeli tersimpan.'}`)
       .setFooter({text:`Halaman ${page+1}/${pages} • ${summary.count} akun • Urutan saldo terbesar`})],components:[new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`admin_balances:${page-1}`).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
         new ButtonBuilder().setCustomId(`admin_balances:${page+1}`).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1),
@@ -142,7 +144,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(i.isButton()) {
       if(i.customId.startsWith('admin_balances:')) {
-        await i.update(buyerBalances(Number(i.customId.split(':')[1])));return true;
+        await i.update(await buyerBalances(Number(i.customId.split(':')[1])));return true;
       }
       if(['admin_catalog_menu','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu'].includes(i.customId)) {
         await i.update(section(i.customId));return true;
@@ -150,8 +152,9 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
       if(i.customId==='admin_topup_history' || i.customId==='admin_direct_history') {
         const topup=i.customId==='admin_topup_history';
         const rows=db.prepare(topup?"SELECT * FROM topups WHERE purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5":"SELECT * FROM direct_purchases ORDER BY created_at DESC,rowid DESC LIMIT 5").all();
+        await hydrateBuyers(rows.map(r=>r.discord_id));
         const title=topup?'Riwayat Isi Saldo QRIS':'Riwayat QRIS Beli';
-        const content=rows.length?rows.map(r=>topup?`Tagihan: ${r.order_id}\nPembeli: ${r.discord_id}\nSaldo: ${amount(r.amount)} • Status: ${r.status}\nSaldo masuk: ${r.credited?'Ya':'Belum'} • ${r.created_at} UTC`:`Tagihan: ${r.invoice_id}\nPembeli: ${r.discord_id}\nHarga: ${amount(r.amount)} • Status: ${r.state}\nOrder: ${r.provider_order_id || '-'} • ${r.created_at} UTC`).join('\n\n'):'Belum ada transaksi.';
+        const content=rows.length?rows.map(r=>topup?`Tagihan: ${r.order_id}\nPembeli: ${buyerLabel(r.discord_id)}\nSaldo: ${amount(r.amount)} • Status: ${r.status}\nSaldo masuk: ${r.credited?'Ya':'Belum'} • ${r.created_at} UTC`:`Tagihan: ${r.invoice_id}\nPembeli: ${buyerLabel(r.discord_id)}\nHarga: ${amount(r.amount)} • Status: ${r.state}\nOrder: ${r.provider_order_id || '-'} • ${r.created_at} UTC`).join('\n\n'):'Belum ada transaksi.';
         await i.reply({ephemeral:true,content:`**${title} — 5 transaksi terakhir**\n\n${content}`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Primary))]});return true;
       }
       if(i.customId==='admin_balance_add') {
@@ -164,11 +167,13 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
       if(i.customId==='admin_balance_history') {
         creditBalance ||= createManualBalance(db);
         const rows=db.prepare('SELECT * FROM manual_balance_credits ORDER BY created_at DESC, rowid DESC LIMIT 4').all();
-        await i.reply({ephemeral:true,content:rows.length?rows.map(r=>`Pembeli: ${r.discord_id}\nTambah: ${amount(r.amount)} • Saldo setelah transaksi: ${amount(r.balance_after)}\nAdmin: ${r.admin_id} • ${r.created_at} UTC\nCatatan: ${r.note}`).join('\n\n'):'Belum ada penambahan saldo manual.',allowedMentions:{parse:[]}});return true;
+        await hydrateBuyers(rows.map(r=>r.discord_id));
+        await i.reply({ephemeral:true,content:rows.length?rows.map(r=>`Pembeli: ${buyerLabel(r.discord_id)}\nTambah: ${amount(r.amount)} • Saldo setelah transaksi: ${amount(r.balance_after)}\nAdmin: ${r.admin_id} • ${r.created_at} UTC\nCatatan: ${r.note}`).join('\n\n'):'Belum ada penambahan saldo manual.',allowedMentions:{parse:[]}});return true;
       }
       if(i.customId==='admin_payment_issues') {
         const rows=db.prepare("SELECT * FROM direct_purchases WHERE state='review' ORDER BY created_at DESC LIMIT 5").all();
-        await i.reply({ephemeral:true,content:rows.length?rows.map(r=>`Tagihan: ${r.invoice_id}\nPembeli: ${r.discord_id}\nProduk: ${r.product_id} • ${amount(r.amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\n${r.error}`).join('\n\n'):'Tidak ada pembayaran yang perlu diperiksa.'});return true;
+        await hydrateBuyers(rows.map(r=>r.discord_id));
+        await i.reply({ephemeral:true,content:rows.length?rows.map(r=>`Tagihan: ${r.invoice_id}\nPembeli: ${buyerLabel(r.discord_id)}\nProduk: ${r.product_id} • ${amount(r.amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\n${r.error}`).join('\n\n'):'Tidak ada pembayaran yang perlu diperiksa.'});return true;
       }
       if(i.customId==='admin_pricing') {
         const settings=pricing.get();
@@ -217,9 +222,10 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
         try {buyer=await resolveUser(buyerId);} catch {throw new Error('Pengguna Discord tidak dapat diperiksa. Periksa ID pembeli dan coba lagi.');}
         if(!buyer || buyer.bot) throw new Error('ID tersebut bukan pengguna pembeli. Gunakan ID akun pengguna, bukan bot/server/channel.');
         if(!isDiscordAdmin(i.user.id))throw new Error('Akses admin sudah dicabut.');
+        rememberBuyer(buyer);
         creditBalance ||= createManualBalance(db);
         const result=creditBalance({interactionId:i.id,adminId:i.user.id,buyerId,amount:Number(raw),note});
-        await i.editReply({content:`✅ Saldo pembeli ${buyer.username} (${buyerId}) ditambah ${amount(result.amount)}.\nSaldo setelah transaksi: ${amount(result.balance_after)}\nCatatan: ${note}`,allowedMentions:{parse:[]}});
+        await i.editReply({content:`✅ Saldo pembeli ${buyerLabel(buyerId)} ditambah ${amount(result.amount)}.\nSaldo setelah transaksi: ${amount(result.balance_after)}\nCatatan: ${note}`,allowedMentions:{parse:[]}});
       } catch(error) {await i.editReply({content:error.message,allowedMentions:{parse:[]}});}
       return true;
     }

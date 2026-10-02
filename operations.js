@@ -1,3 +1,4 @@
+const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
 function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.env,sendDM,now=()=>Date.now(),staff}) {
   db.exec(`CREATE TABLE IF NOT EXISTS shop_operations_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS admin_resolutions(invoice_id TEXT PRIMARY KEY,admin_id TEXT NOT NULL,action TEXT NOT NULL,note TEXT NOT NULL,provider_order_id TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -164,7 +165,8 @@ function createOperationsHandler({discord,ops}) {
       else if(id==='admin_ops_low_save') {ops.saveLow(i.user.id,i.fields.getTextInputValue('threshold').trim(),i.fields.getTextInputValue('enabled').trim());await i.editReply({content:'✅ Pengaturan peringatan saldo tersimpan. Peringatan dikirim melalui DM admin.'});}
       else if(id==='admin_ops_buyer_find') {
         const buyerId=i.fields.getTextInputValue('buyer').trim(),r=ops.buyer(buyerId);
-        await i.editReply({content:r?`Pembeli: <@${buyerId}>\nID: ${buyerId}\nSaldo: **${money(r.account.balance)}**\n\n**Pesanan terakhir**\n${r.orders.map(o=>`#${o.provider_order_id} • ${money(o.amount)} • ${o.status}`).join('\n') || 'Belum ada.'}\n\n**Isi saldo QRIS terakhir**\n${r.topups.map(t=>`${money(t.amount)} • ${t.status}`).join('\n') || 'Belum ada.'}`:'Akun pembeli belum tersimpan.',allowedMentions:{parse:[]}});
+        await hydrateBuyers([buyerId]);
+        await i.editReply({content:r?`Pembeli: ${buyerLabel(buyerId)}\nID: ${buyerId}\nSaldo: **${money(r.account.balance)}**\n\n**Pesanan terakhir**\n${r.orders.map(o=>`#${o.provider_order_id} • ${money(o.amount)} • ${o.status}`).join('\n') || 'Belum ada.'}\n\n**Isi saldo QRIS terakhir**\n${r.topups.map(t=>`${money(t.amount)} • ${t.status}`).join('\n') || 'Belum ada.'}`:'Akun pembeli belum tersimpan.',allowedMentions:{parse:[]}});
       } else if(id==='admin_payment_issues' || id.startsWith('admin_ops_issues:')) {
         const r=ops.issues(Number(id.split(':')[1]) || 0);
         const components=r.rows.length?[buttons(r.rows.map(x=>['admin_ops_issue:'+x.invoice_id,`${money(x.amount)} • ${x.discord_id}`]))]:[];
@@ -172,7 +174,8 @@ function createOperationsHandler({discord,ops}) {
         await i.editReply({content:`**Pembayaran Perlu Diperiksa**\nHalaman ${r.page+1}/${r.pages} • ${r.count} transaksi\n${r.count?'Pilih transaksi untuk memeriksa dan menyelesaikan.':'Tidak ada transaksi bermasalah.'}`,components});
       } else if(id.startsWith('admin_ops_issue:')) {
         const r=ops.issue(id.split(':')[1]);if(!r)throw new Error('Tagihan tidak ditemukan.');
-        await i.editReply({content:`Tagihan: ${r.invoice_id}\nPembeli: ${r.discord_id}\nHarga jual: ${money(r.amount)}\nBiaya provider: ${money(r.provider_amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\nStatus: ${r.state}\n${r.error || ''}\n\nPeriksa pembayaran gateway dan riwayat SMSCode. Hubungkan hanya order yang benar milik transaksi ini. Untuk refund tanpa ID order, pastikan di riwayat SMSCode tidak ada order berhasil/masih aktif. Refund hanya harga produk ke saldo bot; biaya QRIS tidak termasuk.`,allowedMentions:{parse:[]},components:r.state==='review'?[buttons([['admin_ops_attach:'+r.invoice_id,'Hubungkan Pesanan'],['admin_ops_refund:'+r.invoice_id,'Refund ke Saldo'],['admin_payment_issues','Kembali']])]:[buttons([['admin_payment_issues','Kembali']])]});
+        await hydrateBuyers([r.discord_id]);
+        await i.editReply({content:`Tagihan: ${r.invoice_id}\nPembeli: ${buyerLabel(r.discord_id)}\nHarga jual: ${money(r.amount)}\nBiaya provider: ${money(r.provider_amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\nStatus: ${r.state}\n${r.error || ''}\n\nPeriksa pembayaran gateway dan riwayat SMSCode. Hubungkan hanya order yang benar milik transaksi ini. Untuk refund tanpa ID order, pastikan di riwayat SMSCode tidak ada order berhasil/masih aktif. Refund hanya harga produk ke saldo bot; biaya QRIS tidak termasuk.`,allowedMentions:{parse:[]},components:r.state==='review'?[buttons([['admin_ops_attach:'+r.invoice_id,'Hubungkan Pesanan'],['admin_ops_refund:'+r.invoice_id,'Refund ke Saldo'],['admin_payment_issues','Kembali']])]:[buttons([['admin_payment_issues','Kembali']])]});
       } else if(id.startsWith('admin_ops_resolve:')) {
         const [,action,invoiceId]=id.split(':');
         const r=await ops.resolve({invoiceId,action,adminId:i.user.id,orderId:i.fields.getTextInputValue('order').trim(),note:i.fields.getTextInputValue('note').trim(),confirmation:i.fields.getTextInputValue('confirm').trim()});
