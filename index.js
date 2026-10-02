@@ -282,11 +282,13 @@ async function startDiscord(){
 
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing});
+  const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments});
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
       if(await handleAdmin(i)) return;
+      if(await handleProviderFlow(i)) return;
       if(await handlePayment(i)) return;
       if(await handleFlow(i)) return;
 
@@ -423,4 +425,3 @@ async function startDiscord(){
 startDiscord();
 
 app.listen(process.env.PORT||3000,()=>console.log(`Dashboard: http://localhost:${process.env.PORT||3000}`));
-

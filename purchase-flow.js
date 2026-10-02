@@ -24,12 +24,14 @@ function flowOptions(stage, state, catalog) {
   throw new Error('Tahap pembelian tidak valid.');
 }
 
-function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
+function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminView=false}) {
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle}=discord;
   const titles={app:'1. Pilih Aplikasi',country:'2. Pilih Negara',operator:'3. Pilih Operator',product:'4. Pilih Harga & Stok'};
   const next={app:'country',country:'operator',operator:'product'};
   const previous={country:'app',operator:'country',product:'operator'};
   const cache=new Map();
+  const startId=adminView?'provider_catalog':'shop_products';
+  const productPrefix=adminView?'provider_product':'pick_product';
   async function list(path) {
     const cached=cache.get(path);
     if(cached && cached.expires>Date.now()) return cached.data;
@@ -39,7 +41,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
     return r.data;
   }
   function key(prefix,stage,state,page=0) {
-    return `${prefix}:${stage}:${state.app || '-'}:${state.country || '-'}:${state.operator || '-'}:${page}`;
+    return `${adminView?'provider_'+prefix:prefix}:${stage}:${state.app || '-'}:${state.country || '-'}:${state.operator || '-'}:${page}`;
   }
   async function catalog(stage,state) {
     // First screen needs only application names, not the full product inventory.
@@ -51,7 +53,15 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
       smsCatalogProducts(filters),
       ['operator','product'].includes(stage)?list(`/catalog/operators?country_id=${encodeURIComponent(state.country)}&platform_id=${encodeURIComponent(state.app)}`):Promise.resolve([])
     ]);
-    return {services:[],countries,products:pricing?result.data.map(p=>({...p,price:pricing.price(p.price?.canonical_amount ?? p.price)})):result.data,operators};
+    return {services:[],countries,products:pricing?result.data.map(p=>({...p,providerPrice:Number(p.price?.canonical_amount ?? p.price),price:pricing.price(p.price?.canonical_amount ?? p.price)})):result.data,operators};
+  }
+  function optionsFor(stage,state,data) {
+    const options=flowOptions(stage,state,data);
+    if(adminView && stage==='product')for(const o of options) {
+      const p=data.products.find(p=>String(p.id)===o.value);
+      o.description=`Dasar ${p.providerPrice.toLocaleString('id-ID')} • Jual ${p.price.toLocaleString('id-ID')} • Stok ${p.available || 0}`;
+    }
+    return options;
   }
   function render(stage,state,options,requested=0) {
     const pages=Math.max(1,Math.ceil(options.length/20));
@@ -60,10 +70,10 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
     const visible=options.slice(page*20,(page+1)*20);
     for(let offset=0;offset<visible.length;offset+=5) {
       components.push(new ActionRowBuilder().addComponents(...visible.slice(offset,offset+5).map(o=>
-        new ButtonBuilder().setCustomId(stage==='product'?`pick_product:${o.value}:${state.app}:${state.country}`:`${key('flow_pick',stage,state,page)}:${o.value}`)
+        new ButtonBuilder().setCustomId(stage==='product'?`${productPrefix}:${o.value}:${state.app}:${state.country}`:`${key('flow_pick',stage,state,page)}:${o.value}`)
           .setLabel(String(stage==='product'?o.description:o.label).slice(0,80))
           .setStyle(ButtonStyle.Secondary)
-          .setDisabled(stage==='product' && o.description.includes('Tidak tersedia'))
+          .setDisabled(!adminView && stage==='product' && o.description.includes('Tidak tersedia'))
       )));
     }
     const buttons=[];
@@ -71,19 +81,34 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
       new ButtonBuilder().setCustomId(key('flow_page',stage,state,page-1)).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
       new ButtonBuilder().setCustomId(key('flow_page',stage,state,page+1)).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1));
     if(previous[stage])buttons.push(new ButtonBuilder().setCustomId(key('flow_page',previous[stage],state)).setLabel('Kembali').setStyle(ButtonStyle.Secondary));
-    buttons.push(new ButtonBuilder().setCustomId('shop_products').setLabel('Mulai Ulang').setStyle(ButtonStyle.Primary));
+    buttons.push(new ButtonBuilder().setCustomId(startId).setLabel('Mulai Ulang').setStyle(ButtonStyle.Primary));
+    if(adminView)buttons.push(new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Secondary));
     components.push(new ActionRowBuilder().addComponents(...buttons));
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`🛒 OTP Maboyy • ${titles[stage]}`)
-      .setDescription(options.length?(stage==='product'?'Pilih harga dan stok, lalu periksa konfirmasi pembelian.':'Tekan tombol pilihan untuk melanjutkan.'):'Pilihan ini belum memiliki produk di katalog SMSCode. Kembali atau pilih aplikasi lain.')
+      .setDescription(options.length?(adminView && stage==='product'?'Harga dasar dan stok dari SMSCode; harga jual mengikuti pengaturan toko. Tekan produk untuk detail.':stage==='product'?'Pilih harga dan stok, lalu periksa konfirmasi pembelian.':'Tekan tombol pilihan untuk melanjutkan.'):'Pilihan ini belum memiliki produk di katalog SMSCode. Kembali atau pilih aplikasi lain.')
       .setFooter({text:`Halaman ${page+1}/${pages} • ${options.length} pilihan`})],components};
   }
   return async function handleFlow(i) {
-    const id=String(i.customId || '');
+    const originalId=String(i.customId || '');
+    if(adminView && !originalId.startsWith('provider_'))return false;
+    if(!adminView && originalId.startsWith('provider_'))return false;
+    if(adminView && !require('./admin').isDiscordAdmin(i.user.id)) {
+      await i.reply({ephemeral:true,content:'Akses ditolak. Katalog ini hanya untuk admin toko.'});return true;
+    }
+    if(adminView && originalId.startsWith('provider_product:')) {
+      await i.deferReply({ephemeral:true});
+      const [,pid,app,country]=originalId.split(':');
+      const data=await catalog('product',{app,country});const p=data.products.find(p=>String(p.id)===pid);
+      if(!p){await i.editReply({content:'Produk tidak tersedia lagi.'});return true;}
+      await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`Katalog Provider • ${String(p.name || p.id).slice(0,180)}`)
+        .setDescription(`Harga dasar: **${p.providerPrice.toLocaleString('id-ID')} IDR**\nHarga jual: **${p.price.toLocaleString('id-ID')} IDR**\nSelisih: **${(p.price-p.providerPrice).toLocaleString('id-ID')} IDR**\nStok: **${p.available || 0}**\nStatus: **${p.active?'Aktif':'Nonaktif'}**`)],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual Semua Layanan').setStyle(ButtonStyle.Primary))]});return true;
+    }
+    const id=adminView?(originalId===startId?'shop_products':originalId.replace(/^provider_/,'')):originalId;
     if(id!=='shop_products' && !id.startsWith('flow_page:') && !id.startsWith('flow_select:') && !id.startsWith('flow_pick:'))return false;
     if(id==='shop_products') {
       await i.deferReply({ephemeral:true});
       const state={};
-      await i.editReply(render('app',state,flowOptions('app',state,await catalog('app',state))));
+      await i.editReply(render('app',state,optionsFor('app',state,await catalog('app',state))));
       return true;
     }
     const [prefix,stage,app,country,operator,rawPage,picked]=id.split(':');
@@ -93,7 +118,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
     const data=await catalog(stage,state);
     if(prefix==='flow_select' || prefix==='flow_pick') {
       const value=prefix==='flow_pick'?picked:i.values?.[0];
-      if(!flowOptions(stage,state,data).some(o=>o.value===value)) {
+      if(!optionsFor(stage,state,data).some(o=>o.value===value)) {
         await i.editReply({content:'Pilihan tidak tersedia lagi. Klik Mulai Ulang.',embeds:[],components:render('app',{},[]).components});
         return true;
       }
@@ -101,9 +126,9 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing}) {
       // Service IDs use platform_id in SMSCode products.
       const target=next[stage];
       if(!target)throw new Error('Pilihan tidak valid.');
-      await i.editReply(render(target,state,flowOptions(target,state,await catalog(target,state))));
+      await i.editReply(render(target,state,optionsFor(target,state,await catalog(target,state))));
     } else {
-      await i.editReply(render(stage,state,flowOptions(stage,state,data),Number(rawPage)));
+      await i.editReply(render(stage,state,optionsFor(stage,state,data),Number(rawPage)));
     }
     return true;
   };

@@ -21,12 +21,14 @@ function createAdminHandler({discord, db, smscode,pricing}) {
   const amount=value=>`${Number(value || 0).toLocaleString('id-ID')} IDR`;
   function home() {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
-      .setDescription('Atur persentase keuntungan dan harga jual melalui Atur Harga Jual. Harga dasar dan stok provider mengikuti SMSCode. Katalog lokal dikelola terpisah.')],components:[
+      .setDescription('Katalog Provider menampilkan layanan SMSCode, harga dasar, harga jual, dan stok. Atur Harga Jual berlaku untuk semua layanan. Produk Manual adalah katalog terpisah; tidak dipakai oleh Beli OTP.')],components:[
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('admin_products:0').setLabel('Katalog Lokal').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('provider_catalog').setLabel('Katalog Provider').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_products:0').setLabel('Produk Manual').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('admin_add').setLabel('Tambah Produk').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('admin_health').setLabel('Koneksi & Saldo Provider').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual').setStyle(ButtonStyle.Primary)
+      ),new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary)
       )]};
   }
