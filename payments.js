@@ -118,10 +118,11 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
           new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});return true;
     }
     if(id==='topup_manual') {
-      const admins=(adminIds?adminIds():(env.ADMIN_DISCORD_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s))).slice(0,5);
+      const admins=(adminIds?adminIds(i):(env.ADMIN_DISCORD_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s))).slice(0,5);
       const instructions=String(manualInstructions?manualInstructions():env.MANUAL_TOPUP_INSTRUCTIONS || '').trim().slice(0,1100);
       await i.reply({ephemeral:true,allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💵 Isi Saldo Manual')
         .setDescription(`Minimal isi saldo **5.000 IDR**.\n\n1. Hubungi admin untuk meminta tujuan pembayaran dan konfirmasi nominal.\n2. Lakukan pembayaran sesuai petunjuk admin.\n3. Kirim bukti pembayaran dan ID Discord Anda kepada admin.\n4. Setelah pembayaran diperiksa, admin menambahkan saldo.\n\n**ID Discord Anda:** ${i.user.id}\n**Admin:** ${admins.length?admins.map(a=>`<@${a}>`).join(', '):'Hubungi pengelola toko.'}${instructions?'\n\n**Petunjuk pembayaran:**\n'+instructions:''}\n\nTekan Kirim Bukti Pembayaran untuk membuka formulir bukti pembayaran. Admin memeriksa mutasi sebelum menyetujui. Tekan Status Pengajuan untuk melihat hasilnya.`)],components:[new ActionRowBuilder().addComponents(
+          ...(admins[0]?[new ButtonBuilder().setLabel('Hubungi Admin').setStyle(5).setURL('https://discord.com/users/'+admins[0])]:[]),
           new ButtonBuilder().setCustomId('shop_balance').setLabel('Cek Saldo').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('shop_topup').setLabel('Kembali').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId('manual_upload').setLabel('Kirim Bukti Pembayaran').setStyle(ButtonStyle.Primary),

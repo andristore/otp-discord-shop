@@ -4,6 +4,18 @@ function createStaff({db,env=process.env}) {
     CREATE TABLE IF NOT EXISTS store_staff_audit(id INTEGER PRIMARY KEY,discord_id TEXT NOT NULL,owner_id TEXT NOT NULL,action TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
   const owners=ids(String(env.OWNER_DISCORD_IDS || '').trim() || env.ADMIN_DISCORD_IDS);
   const isOwner=id=>owners.includes(String(id));
+  db.exec('CREATE TABLE IF NOT EXISTS store_guild_contacts(guild_id TEXT PRIMARY KEY,admin_id TEXT NOT NULL,updated_by TEXT NOT NULL)');
+  function contactIds(guildId) {
+    if(!guildId)return owners.slice(0,1);
+    const contact=db.prepare('SELECT admin_id FROM store_guild_contacts WHERE guild_id=?').get(String(guildId));
+    return contact&&isAdmin(contact.admin_id)?[contact.admin_id]:[];
+  }
+  function setContact(ownerId,guildId,adminId) {
+    if(!isOwner(ownerId))throw Error('Hanya owner boleh mengatur kontak admin server.');
+    if(!/^\d{17,20}$/.test(String(guildId)))throw Error('Buka pengaturan ini di server yang ingin diatur.');
+    if(!isAdmin(adminId))throw Error('Kontak harus sudah terdaftar sebagai admin toko.');
+    db.prepare('INSERT INTO store_guild_contacts VALUES(?,?,?) ON CONFLICT(guild_id) DO UPDATE SET admin_id=excluded.admin_id,updated_by=excluded.updated_by').run(String(guildId),String(adminId),String(ownerId));
+  }
   function isAdmin(id) {
     id=String(id);if(isOwner(id))return true;
     const saved=db.prepare('SELECT enabled FROM store_staff WHERE discord_id=?').get(id);
@@ -25,7 +37,7 @@ function createStaff({db,env=process.env}) {
       db.prepare('INSERT INTO store_staff_audit(discord_id,owner_id,action) VALUES(?,?,?)').run(id,ownerId,enabled?'grant':'revoke');
     })();
   }
-  return {isOwner,isAdmin,list,ids:()=>list().map(s=>s.id),change};
+  return {isOwner,isAdmin,list,ids:()=>list().map(s=>s.id),change,contactIds,setContact};
 }
 function createStaffHandler({discord,staff,resolveUser}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
@@ -34,17 +46,26 @@ function createStaffHandler({discord,staff,resolveUser}) {
     const id=String(i.customId || '');if(!id.startsWith('admin_staff_'))return false;
     if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     if(id==='admin_staff_access') {
-      const r=row([['admin_ops_guilds','Izin Server'],['admin_staff_list:0','Admin Toko'],['admin_transactions_menu','Kembali']]);r.components[1].setDisabled(!staff.isOwner(i.user.id));
+      const r=row([['admin_ops_guilds','Izin Server'],['admin_staff_list:0','Admin Toko'],['admin_staff_contact','Kontak Admin Server'],['admin_transactions_menu','Kembali']]);r.components[1].setDisabled(!staff.isOwner(i.user.id));r.components[2].setDisabled(!staff.isOwner(i.user.id));
       await i.reply({ephemeral:true,content:'**Izin & Admin**\nKelola izin server. Pengaturan admin toko hanya tersedia untuk owner.',components:[r]});return true;
     }
     if(!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Hanya owner toko yang boleh mengelola admin.'});return true;}
+    if(id==='admin_staff_contact') {
+      if(!i.guildId){await i.reply({ephemeral:true,content:'Buka /admin di server yang ingin diatur kontaknya.'});return true;}
+      await i.showModal(new ModalBuilder().setCustomId('admin_staff_contact_save').setTitle('Kontak Admin Server Ini').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID Discord admin untuk server ini').setRequired(true).setMaxLength(20).setStyle(TextInputStyle.Short))));return true;
+    }
     if(id==='admin_staff_add') {
       await i.showModal(new ModalBuilder().setCustomId('admin_staff_save').setTitle('Tambah Admin Toko')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID Discord pengguna calon admin').setRequired(true).setMaxLength(20).setStyle(TextInputStyle.Short))));return true;
     }
     await i.deferReply({ephemeral:true});
     try {
-      if(id==='admin_staff_save') {
+      if(id==='admin_staff_contact_save') {
+        const target=i.fields.getTextInputValue('id').trim(),user=await resolveUser(target);
+        if(!user||user.bot)throw Error('Pilih akun admin pengguna, bukan bot.');
+        staff.setContact(i.user.id,i.guildId,target);
+        await i.editReply({content:`✅ Kontak admin server ini: <@${target}>. Server lain tetap memakai kontak masing-masing.`,allowedMentions:{parse:[]},components:[row([['admin_staff_access','Kembali']])]});
+      }else if(id==='admin_staff_save') {
         const target=i.fields.getTextInputValue('id').trim();if(!/^\d{17,20}$/.test(target))throw new Error('ID pengguna tidak valid.');
         const user=await resolveUser(target);if(!user || user.bot)throw new Error('Gunakan ID akun pengguna, bukan bot.');
         staff.change(i.user.id,target,1);await i.editReply({content:`✅ Pengguna ${target} ditambahkan sebagai admin toko.`,components:[row([['admin_staff_list:0','Daftar Admin']])]});

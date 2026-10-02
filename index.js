@@ -13,6 +13,7 @@ const {
 
 const {createBuyerProfiles,configureBuyerProfiles,rememberBuyer}=require("./buyer-profiles");
 const {createManualProducts,createManualProductsHandler}=require("./manual-products");
+const {createOrderHistory,createOrderHistoryHandler}=require("./order-history");
 const {createAdminHandler,configureAdminAccess}=require("./admin");
 const {createPurchaseFlow}=require("./purchase-flow");
 const {createPayments,createPaymentHandler}=require("./payments");
@@ -294,7 +295,7 @@ async function startDiscord(){
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
       .setDescription("Selamat datang di Produk Digital by Maboyy")
-      .setFooter({text:"Since 2020"});
+      .setFooter({text:"since 2020 • Andri Store"});
   }
 
   function mainRow(){
@@ -318,9 +319,10 @@ async function startDiscord(){
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id),audit:toolkit.audit});
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
+  const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
-  const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:()=>staff.ids()});
+  const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
   const handleStaff=createStaffHandler({discord:require("discord.js"),staff,resolveUser:id=>client.users.fetch(id)});
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess});
@@ -333,7 +335,7 @@ async function startDiscord(){
       if(await serverAccess.gate(i))return;
       rememberBuyer(i.user);
       addHomeNavigation(i);
-      if(i.isButton() && i.customId===HOME_ID){
+      if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
       if(await handleStoreFeatures(i))return;
@@ -341,6 +343,7 @@ async function startDiscord(){
         return i.reply({ephemeral:true,content:'🔧 Toko sedang maintenance. Pembelian baru dihentikan sementara. Pesanan, OTP, dan tagihan sebelumnya tetap tersedia.'});
       }
       if(await handleTools(i))return;
+      if(await handleOrderHistory(i))return;
       if(await handleEfficiency(i))return;
       if(await handleStaff(i))return;
       if(await handleServerAccess(i))return;
@@ -411,7 +414,11 @@ async function startDiscord(){
                 .setDescription("OTP akan dikirim melalui DM saat masuk. Tombol **Cek OTP** tetap tersedia jika DM tidak diterima.")],
               components:[buttons]
             });
-          }catch(e){return i.editReply("❌ Gagal membuat order: "+e.message);}
+          }catch(e){
+            const owner=/saldo tidak cukup/i.test(e.message)?staff.contactIds(i.guildId)[0]:null;
+            if(owner)return i.editReply({content:'❌ '+e.message+' Tekan Hubungi Admin untuk isi saldo melalui DM.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Hubungi Admin').setStyle(ButtonStyle.Link).setURL('https://discord.com/users/'+owner))]});
+            return i.editReply("❌ Gagal membuat order: "+e.message);
+          }
         }
 
         if(i.customId.startsWith("check_otp:")){
