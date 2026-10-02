@@ -12,6 +12,7 @@ const {
 } = require("discord.js");
 
 const {createBuyerProfiles,configureBuyerProfiles,rememberBuyer}=require("./buyer-profiles");
+const {createManualProducts,createManualProductsHandler}=require("./manual-products");
 const {createAdminHandler,configureAdminAccess}=require("./admin");
 const {createPurchaseFlow}=require("./purchase-flow");
 const {createPayments,createPaymentHandler}=require("./payments");
@@ -298,19 +299,21 @@ async function startDiscord(){
       .setDescription(
         "Selamat datang di Hi, OTP Sms Virtual.\n\n" +
         "Pilih menu di bawah untuk mulai bertransaksi.\n" +
-        "🔒 Transaksi diproses otomatis melalui provider."
+        "🔒 OTP diproses melalui provider. Produk manual diproses oleh admin."
       )
       .setFooter({text:"Hi, OTP Sms Virtual • Automated Service"});
   }
 
   function mainRow(){
-    return new ActionRowBuilder().addComponents(
+    return [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("shop_products").setLabel("Beli OTP").setEmoji("🛒").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("shop_manual_products").setLabel("Produk Lainnya").setEmoji("📦").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("shop_balance").setLabel("Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("shop_orders").setLabel("Pesanan").setEmoji("📦").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary)
+    ),new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary)
-    );
+    )];
   }
 
   const efficiency=createEfficiency({db,staff});
@@ -321,6 +324,8 @@ async function startDiscord(){
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id),audit:toolkit.audit});
+  const manualProducts=createManualProducts({db,staff,audit:toolkit.audit,maintenance:()=>storeFeatures.maintenance()});
+  const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:()=>staff.ids()});
@@ -337,7 +342,7 @@ async function startDiscord(){
       rememberBuyer(i.user);
       addHomeNavigation(i);
       if(i.isButton() && i.customId===HOME_ID){
-        return i.reply({ephemeral:true,embeds:[shopEmbed()],components:[mainRow()]});
+        return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
       if(await handleStoreFeatures(i))return;
       if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:|tool_coupon)/.test(String(i.customId || ''))){
@@ -348,6 +353,7 @@ async function startDiscord(){
       if(await handleStaff(i))return;
       if(await handleServerAccess(i))return;
       if(await handleOperations(i)) return;
+      if(await handleManualProducts(i)) return;
       if(await handleAdmin(i)) return;
       if(await handleProviderFlow(i)) return;
       if(await handlePayment(i)) return;
@@ -355,7 +361,7 @@ async function startDiscord(){
       if(await handleFlow(i)) return;
 
       if(i.isChatInputCommand() && i.commandName==="shop"){
-        return i.reply({embeds:[shopEmbed()],components:[mainRow()]});
+        return i.reply({embeds:[shopEmbed()],components:mainRow()});
       }
 
       if(i.isButton()){

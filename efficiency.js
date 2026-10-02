@@ -49,7 +49,7 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
       }else if(id.startsWith('favorite_detail:')){
         const f=model.favorite(user,id.split(':')[1]);await i.editReply({content:`⭐ **${f.name}**\nNegara ID: ${f.country} • operator: ${f.operator==='any'?'Any':f.operator}\nBuka untuk melihat harga dan stok terbaru.`,components:[row([['favorite_open:'+f.id,'Lihat Harga & Stok'],['favorite_delete:'+f.id,'Hapus Favorit'],['favorites','Kembali'],['tool_stock:'+f.id,'Notifikasi Stok On/Off']])]});
       }else if(id==='shop_orders'){
-        const r=model.activeOrders(user);await i.editReply({content:`**📦 Pesanan Saya**\n${r.count} pesanan aktif.`,components:[row([['active_orders:0','Pesanan Aktif'],['shop_order_history','Riwayat Pesanan']])]});
+        const r=model.activeOrders(user);await i.editReply({content:`**📦 Pesanan Saya**\n${r.count} pesanan OTP aktif.`,components:[row([['active_orders:0','OTP Aktif'],['shop_order_history','Riwayat OTP'],['manual_orders:0','Pesanan Manual']])]});
       }else if(id.startsWith('active_orders:')){
         const r=model.activeOrders(user,Number(id.split(':')[1])),components=[];
         if(r.rows.length)components.push(row(r.rows.map(o=>['active_order:'+o.id,`#${o.provider_order_id} • ${o.phone || '-'} • ${o.otp?'OTP diterima':'menunggu'}`])));components.push(nav('active_orders:',r,'shop_orders'));

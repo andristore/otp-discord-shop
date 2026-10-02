@@ -55,11 +55,11 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
   }
   function section(id) {
     if(id==='admin_catalog_menu')return menu('🏪 Toko','Katalog, harga jual, dan promo.',[
-      ['provider_catalog','Katalog Provider'],['admin_products:0','Produk Manual'],['admin_add','Tambah Produk'],['admin_pricing','Harga Jual'],['admin_tools_coupons:0','Voucher']]);
+      ['provider_catalog','Katalog Provider'],['admin_manual_catalog:0','Produk Manual'],['admin_manual_add','Tambah Produk Manual'],['admin_pricing','Harga OTP Provider'],['admin_tools_coupons:0','Voucher']]);
     if(id==='admin_balance_menu')return menu('👥 Pembeli','Akun, saldo, dan bantuan pembeli.',[
       ['admin_balances:0','Daftar Saldo'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo'],['admin_balance_history','Riwayat Saldo Manual'],['admin_tools_tickets:0','Tiket Bantuan']]);
     if(id==='admin_transactions_menu')return menu('💳 Pembayaran','Verifikasi pembayaran dan pengajuan.',[
-      ['admin_store_requests:0','Pengajuan Manual'],['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']]);
+      ['admin_manual_orders:0','Pesanan Produk Manual'],['admin_store_requests:0','Pengajuan Manual'],['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']]);
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
       ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fee','Catat Biaya Gateway']]);
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Akses, backup, dan pemantauan toko.',[
