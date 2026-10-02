@@ -29,6 +29,7 @@ function createAdminHandler({discord, db, smscode,pricing}) {
         new ButtonBuilder().setCustomId('admin_health').setLabel('Koneksi & Saldo Provider').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('admin_payment_issues').setLabel('Pembayaran Perlu Diperiksa').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary)
       )]};
   }
@@ -81,6 +82,10 @@ function createAdminHandler({discord, db, smscode,pricing}) {
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(i.isButton()) {
+      if(i.customId==='admin_payment_issues') {
+        const rows=db.prepare("SELECT * FROM direct_purchases WHERE state='review' ORDER BY created_at DESC LIMIT 5").all();
+        await i.reply({ephemeral:true,content:rows.length?rows.map(r=>`Tagihan: ${r.invoice_id}\nPembeli: ${r.discord_id}\nProduk: ${r.product_id} • ${amount(r.amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\n${r.error}`).join('\n\n'):'Tidak ada pembayaran yang perlu diperiksa.'});return true;
+      }
       if(i.customId==='admin_pricing') {
         const settings=pricing.get();
         await i.showModal(new ModalBuilder().setCustomId('admin_pricing_save').setTitle('Atur Harga Jual Semua Layanan')

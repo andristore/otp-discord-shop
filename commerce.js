@@ -8,7 +8,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel}) {
     for(const [key,c] of checkouts)if(c.expires<Date.now())checkouts.delete(key);
     const providerAmount=Number(product.price?.canonical_amount ?? product.price);
     const amount=pricing.price(providerAmount);const token=randomUUID();
-    checkouts.set(token,{userId,productId:Number(product.id),providerAmount,amount,expires:Date.now()+300000});
+    checkouts.set(token,{userId,productId:Number(product.id),providerAmount,amount,name:product.name || `Produk ${product.id}`,platformId:product.platform_id,countryId:product.country_id,expires:Date.now()+300000});
     return {token,amount,providerAmount};
   }
   async function buy(userId,token) {
@@ -54,6 +54,12 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel}) {
       })();
     } finally {cancelLocks.delete(String(orderId));}
   }
-  return {quote,buy,cancel};
+  return {quote,buy,cancel,checkout(userId,token,consume=false){
+    const q=checkouts.get(token);
+    if(!q || q.userId!==userId || q.expires<Date.now())throw new Error('Konfirmasi kedaluwarsa. Pilih produk kembali.');
+    if(pricing.price(q.providerAmount)!==q.amount)throw new Error('Harga jual berubah. Pilih produk kembali.');
+    if(consume)checkouts.delete(token);
+    return {...q};
+  }};
 }
 module.exports={createCommerce};

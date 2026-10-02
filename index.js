@@ -14,6 +14,7 @@ const {createPurchaseFlow}=require("./purchase-flow");
 const {createPayments,createPaymentHandler}=require("./payments");
 const {createPricing}=require("./pricing");
 const {createCommerce}=require("./commerce");
+const {createDirectPayments,createDirectHandler}=require("./direct-payments");
 const app = express();
 const db = new Database("shop.db");
 db.pragma("journal_mode = WAL");
@@ -54,8 +55,12 @@ if (db.prepare("SELECT COUNT(*) c FROM products").get().c === 0) {
 const pricing=createPricing(db);
 const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel});
 app.use(express.json());
-const payments=createPayments({db});
+let direct;
+const payments=createPayments({db,onSettled:payment=>direct.fulfill(payment)});
+direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel});
 payments.mount(app);
+const directPoll=setInterval(()=>direct.poll().catch(console.error),30000);
+directPoll.unref();
 app.use(express.urlencoded({extended:true}));
 app.use(session({
   secret: process.env.SESSION_SECRET || "replace-me",
@@ -284,17 +289,20 @@ async function startDiscord(){
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments});
+  const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments});
+  direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(handleDirect.status(row));});
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
       if(await handleAdmin(i)) return;
       if(await handleProviderFlow(i)) return;
       if(await handlePayment(i)) return;
+      if(await handleDirect(i)) return;
       if(await handleFlow(i)) return;
 
       if(i.isChatInputCommand() && i.commandName==="shop"){
         const balance=await getBalance(id);
-        return i.reply({embeds:[shopEmbed(balance)],components:[mainRow(),new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("topup_history").setLabel("Riwayat Isi Saldo").setStyle(ButtonStyle.Secondary))]});
+        return i.reply({embeds:[shopEmbed(balance)],components:[mainRow(),new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("topup_history").setLabel("Riwayat Isi Saldo").setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId("direct_history").setLabel("Riwayat QRIS Beli").setStyle(ButtonStyle.Secondary))]});
       }
 
       if(i.isButton()){
@@ -396,7 +404,8 @@ async function startDiscord(){
         const price=quote.amount;
         const balance=await getBalance(id);
         const confirm=new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`confirm_buy:${quote.token}`).setLabel("Konfirmasi Beli").setEmoji("✅").setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`confirm_buy:${quote.token}`).setLabel("Bayar Pakai Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`qris_buy:${quote.token}`).setLabel("Bayar Langsung QRIS").setEmoji("💳").setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId("shop_products").setLabel("Kembali").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
         );
         return i.editReply({

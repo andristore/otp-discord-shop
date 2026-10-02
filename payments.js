@@ -18,7 +18,7 @@ function validateStatus(payment,status) {
   if(status.order_id!==payment.order_id || Number(status.gross_amount)!==payment.amount || status.currency!=='IDR' || status.payment_type!=='qris')throw new Error('Data pembayaran tidak sesuai tagihan.');
   return status.transaction_status==='settlement' && (!status.fraud_status || status.fraud_status==='accept');
 }
-function createPayments({db,fetchImpl=fetch,env=process.env}) {
+function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{}}) {
   const serverKey=env.MIDTRANS_SERVER_KEY;
   const production=env.MIDTRANS_IS_PRODUCTION==='true';
   const base=production?'https://api.midtrans.com/v2':'https://api.sandbox.midtrans.com/v2';
@@ -27,6 +27,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env}) {
     status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
+  if(!db.prepare('PRAGMA table_info(topups)').all().some(c=>c.name==='purpose'))db.exec("ALTER TABLE topups ADD COLUMN purpose TEXT NOT NULL DEFAULT 'topup'");
   async function request(path,body) {
     if(!serverKey)throw new Error('Pembayaran QRIS belum dikonfigurasi oleh admin.');
     const r=await fetchImpl(base+path,{method:body?'POST':'GET',headers:{
@@ -45,7 +46,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env}) {
     db.prepare('UPDATE topups SET status=? WHERE order_id=?').run(String(status.transaction_status),payment.order_id);
     if(settled) {
       const changed=db.prepare('UPDATE topups SET credited=1 WHERE order_id=? AND credited=0').run(payment.order_id);
-      if(changed.changes)db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(payment.discord_id,payment.amount);
+      if(changed.changes && payment.purpose==='topup')db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(payment.discord_id,payment.amount);
     }
     return db.prepare('SELECT * FROM topups WHERE order_id=?').get(payment.order_id);
   });
@@ -53,13 +54,19 @@ function createPayments({db,fetchImpl=fetch,env=process.env}) {
     const payment=db.prepare('SELECT * FROM topups WHERE order_id=?').get(orderId);
     if(!payment || (userId && payment.discord_id!==userId))throw new Error('Tagihan tidak ditemukan.');
     const status=await request('/'+encodeURIComponent(orderId)+'/status');
-    return apply(status);
+    const action=status.actions?.find(a=>a.name==='generate-qr-code');
+    if(action?.url){try{const u=new URL(action.url);if(u.protocol==='https:' && ['api.midtrans.com','api.sandbox.midtrans.com'].includes(u.hostname))db.prepare('UPDATE topups SET qr_url=? WHERE order_id=?').run(u.href,orderId);}catch {}}
+    const updated=apply(status);
+    if(updated.credited && updated.purpose==='purchase')await onSettled(updated);
+    return updated;
   }
-  async function create(userId,amount) {
+  async function create(userId,amount,options={}) {
     if(!serverKey)throw new Error('Pembayaran QRIS belum dikonfigurasi oleh admin.');
-    amount=parseTopup(amount);
-    const orderId='maboyy-'+randomUUID();
-    db.prepare('INSERT INTO topups(order_id,discord_id,amount) VALUES(?,?,?)').run(orderId,userId,amount);
+    const purpose=options.purpose==='purchase'?'purchase':'topup';
+    if(purpose==='topup')amount=parseTopup(amount);
+    else if(!Number.isSafeInteger(amount)||amount<1||amount>1000000)throw new Error('Harga QRIS harus 1–1.000.000 IDR.');
+    const orderId=options.orderId || 'maboyy-'+randomUUID();
+    db.prepare('INSERT INTO topups(order_id,discord_id,amount,purpose) VALUES(?,?,?,?)').run(orderId,userId,amount,purpose);
     const status=await request('/charge',{payment_type:'qris',transaction_details:{order_id:orderId,gross_amount:amount},qris:{acquirer:'gopay'}});
     validateStatus({order_id:orderId,amount},status);
     const action=status.actions?.find(a=>a.name==='generate-qr-code');
@@ -83,7 +90,8 @@ function createPayments({db,fetchImpl=fetch,env=process.env}) {
     });
   }
   return {create,refresh,mount,configured:Boolean(serverKey),production,
-    recent:userId=>db.prepare('SELECT * FROM topups WHERE discord_id=? ORDER BY created_at DESC LIMIT 5').all(userId)};
+    get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
+    recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC LIMIT 5").all(userId)};
 }
 
 function createPaymentHandler({discord,payments}) {
