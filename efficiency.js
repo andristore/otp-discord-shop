@@ -25,7 +25,7 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder}=discord;
   const row=xs=>new ActionRowBuilder().addComponents(...xs.map(([id,label])=>new ButtonBuilder().setCustomId(id).setLabel(String(label).slice(0,80)).setStyle(ButtonStyle.Secondary)));
   const money=n=>Number(n || 0).toLocaleString('id-ID')+' IDR';
-  const nav=(prefix,r,back)=>{const n=row([[prefix+Math.max(0,r.page-1),'Sebelumnya'],[prefix+Math.min(r.pages-1,r.page+1),'Berikutnya'],[back,'Kembali']]);n.components[0].setDisabled(r.page===0);n.components[1].setDisabled(r.page===r.pages-1);return n;};
+  const nav=(prefix,r,back)=>{const n=row([[prefix+(r.page-1),'Sebelumnya'],[prefix+(r.page+1),'Berikutnya'],[back,'Kembali']]);n.components[0].setDisabled(r.page===0);n.components[1].setDisabled(r.page===r.pages-1);return n;};
   return async i=>{
     const id=String(i.customId || ''),upload=i.isChatInputCommand?.() && i.commandName==='bukti';
     if(!upload && !/^(favorites(?::|$)|favorite_(save|detail|delete):|shop_orders$|active_orders:|active_order:|active_invoice$|manual_upload$|admin_eff_summary$)/.test(id))return false;
