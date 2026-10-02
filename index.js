@@ -9,6 +9,9 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle
 } = require("discord.js");
 
+const {createAdminHandler}=require("./admin");
+const {createPurchaseFlow}=require("./purchase-flow");
+const {createPayments,createPaymentHandler}=require("./payments");
 const app = express();
 const db = new Database("shop.db");
 db.pragma("journal_mode = WAL");
@@ -47,6 +50,8 @@ if (db.prepare("SELECT COUNT(*) c FROM products").get().c === 0) {
 }
 
 app.use(express.json());
+const payments=createPayments({db});
+payments.mount(app);
 app.use(express.urlencoded({extended:true}));
 app.use(session({
   secret: process.env.SESSION_SECRET || "replace-me",
@@ -68,7 +73,7 @@ async function smscode(path, options={}) {
     "Authorization":`Bearer ${process.env.SMSCODE_API_TOKEN}`,
     ...(options.headers||{})
   };
-  const r = await fetch(base + path, {...options, headers});
+  const r = await fetch(base + path, {...options, headers, signal: options.signal || AbortSignal.timeout(15_000)});
   const body = await r.text();
   let data; try { data = JSON.parse(body); } catch { data = {success:false,error:{message:body}}; }
   if(!r.ok || data.success === false) {
@@ -79,9 +84,45 @@ async function smscode(path, options={}) {
 
 function uuidKey(){ return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 
+const CATALOG_CACHE_MS = 60_000;
+let catalogCache = null;
+let catalogLoading = null;
+
 async function smsCatalogProducts(){
-  return smscode("/catalog/products?limit=100&page=1");
+  if(catalogCache && Date.now() < catalogCache.expiresAt) return catalogCache.result;
+  if(catalogLoading) return catalogLoading;
+  catalogLoading = (async()=>{
+    const products = new Map();
+    const limit = 1000;
+    for(let page=1; ; page++){
+      const result = await smscode(`/catalog/products?limit=${limit}&page=${page}&sort=name_asc`);
+      if(!Array.isArray(result.data)) throw new Error("Format katalog SMSCode tidak valid.");
+      const rows = result.data;
+      if(!rows.length) break;
+      const before = products.size;
+      for(const product of rows){
+        if(product.id == null) throw new Error("Produk SMSCode tidak memiliki ID.");
+        products.set(String(product.id), product);
+      }
+      if(products.size === before) throw new Error("SMSCode mengulang halaman katalog; coba lagi nanti.");
+      const pageLimit = Number(result.meta?.limit) || limit;
+      if(rows.length < pageLimit) break;
+    }
+    const result = {data: [...products.values()]};
+    catalogCache = {result, expiresAt: Date.now() + CATALOG_CACHE_MS};
+    return result;
+  })();
+  try { return await catalogLoading; }
+  finally { catalogLoading = null; }
 }
+
+function catalogPage(products, requestedPage=0){
+  const pageCount = Math.max(1, Math.ceil(products.length / 25));
+  const page = Math.min(Math.max(Number.isSafeInteger(requestedPage) ? requestedPage : 0, 0), pageCount-1);
+  return {page, pageCount, products: products.slice(page*25, (page+1)*25)};
+}
+
+function productAvailable(p){ return Boolean(p.active) && Number(p.available)>0; }
 
 async function smsCreateOrder(productId){
   return smscode("/orders/create", {
@@ -112,7 +153,7 @@ async function smsFinish(orderId){
 app.get("/api/products",async(req,res)=>{
   try {
     const data=await smsCatalogProducts();
-    const rows=(data.data||[]).filter(p=>p.active && p.available>0);
+    const rows=data.data;
     res.json(rows);
   } catch(e) {
     res.status(502).json({error:e.message});
@@ -210,7 +251,8 @@ const client = new Client({intents:[GatewayIntentBits.Guilds]});
 async function startDiscord(){
   if(!process.env.DISCORD_TOKEN) return console.log("DISCORD_TOKEN belum diisi; bot tidak dijalankan.");
   const commands=[
-    new SlashCommandBuilder().setName("shop").setDescription("Buka panel toko OTP")
+    new SlashCommandBuilder().setName("shop").setDescription("Buka panel toko OTP"),
+    new SlashCommandBuilder().setName("admin").setDescription("Buka panel admin toko OTP")
   ].map(x=>x.toJSON());
   const rest=new REST({version:"10"}).setToken(process.env.DISCORD_TOKEN);
   if(process.env.DISCORD_CLIENT_ID) await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),{body:commands});
@@ -221,17 +263,17 @@ async function startDiscord(){
     return db.prepare("SELECT balance FROM users WHERE discord_id=?").get(id).balance;
   }
 
-  function shopEmbed(balance, title="OTP Virtual Store"){
+  function shopEmbed(balance, title="OTP Maboyy"){
     return new EmbedBuilder()
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
       .setDescription(
-        "Selamat datang di toko OTP virtual.\\n\\n" +
+        "Selamat datang di OTP Maboyy.\\n\\n" +
         "Pilih menu di bawah untuk mulai bertransaksi.\\n" +
         "🔒 Transaksi diproses otomatis melalui provider."
       )
       .addFields({name:"💰 Saldo Anda",value:`**${money(balance)}**`,inline:true})
-      .setFooter({text:"OTP Virtual Store • Automated Service"});
+      .setFooter({text:"OTP Maboyy • Automated Service"});
   }
 
   function mainRow(){
@@ -239,33 +281,24 @@ async function startDiscord(){
       new ButtonBuilder().setCustomId("shop_products").setLabel("Beli OTP").setEmoji("🛒").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("shop_balance").setLabel("Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("shop_orders").setLabel("Pesanan").setEmoji("📦").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo QRIS").setEmoji("💳").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary)
     );
   }
 
-  async function productMenu(){
-    const data=await smsCatalogProducts();
-    const products=(data.data||[]).filter(p=>p.active && p.available>0).slice(0,25);
-    const menu=new StringSelectMenuBuilder()
-      .setCustomId("buy_product")
-      .setPlaceholder("Pilih layanan OTP...");
-    for(const p of products){
-      const price=p.price?.canonical_amount ?? p.price ?? 0;
-      menu.addOptions(new StringSelectMenuOptionBuilder()
-        .setLabel(`${String(p.name).slice(0,80)}`)
-        .setDescription(`${money(price)} • Stok ${p.available}`)
-        .setValue(String(p.id)));
-    }
-    return {products, row:new ActionRowBuilder().addComponents(menu)};
-  }
-
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode});
+  const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts});
+  const handlePayment=createPaymentHandler({discord:require("discord.js"),payments});
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
+      if(await handleAdmin(i)) return;
+      if(await handlePayment(i)) return;
+      if(await handleFlow(i)) return;
 
       if(i.isChatInputCommand() && i.commandName==="shop"){
         const balance=await getBalance(id);
-        return i.reply({embeds:[shopEmbed(balance)],components:[mainRow()]});
+        return i.reply({embeds:[shopEmbed(balance)],components:[mainRow(),new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("topup_history").setLabel("Riwayat Isi Saldo").setStyle(ButtonStyle.Secondary))]});
       }
 
       if(i.isButton()){
@@ -284,26 +317,13 @@ async function startDiscord(){
               .setDescription(
                 "**Cara membeli OTP**\\n" +
                 "1. Klik **Beli OTP**\\n" +
-                "2. Pilih layanan\\n" +
+                "2. Pilih aplikasi, negara, operator, dan harga\\n" +
                 "3. Konfirmasi pembelian\\n" +
                 "4. Nomor akan diberikan\\n" +
                 "5. Klik **Cek OTP** untuk mengambil kode\\n\\n" +
                 "Jika order gagal, hubungi admin toko."
               )]
           });
-        }
-
-        if(i.customId==="shop_products"){
-          await i.deferReply({ephemeral:true});
-          try{
-            const {products,row}=await productMenu();
-            if(!products.length) return i.editReply({content:"Stok OTP sedang kosong.",components:[]});
-            return i.editReply({
-              embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("🛒 Pilih Produk")
-                .setDescription("Pilih layanan OTP dari dropdown berikut.")],
-              components:[row]
-            });
-          }catch(e){return i.editReply({content:"Gagal mengambil katalog: "+e.message,components:[]});}
         }
 
         if(i.customId==="shop_orders"){
@@ -388,18 +408,18 @@ async function startDiscord(){
       }
 
       if(i.isStringSelectMenu() && i.customId==="buy_product"){
+        await i.deferReply({ephemeral:true});
         const pid=Number(i.values[0]);
         const data=await smsCatalogProducts();
         const p=(data.data||[]).find(x=>Number(x.id)===pid);
-        if(!p) return i.reply({ephemeral:true,content:"Produk sudah tidak tersedia."});
+        if(!p || !productAvailable(p)) return i.editReply({content:"Produk sedang tidak tersedia. Pilih layanan lain dari katalog."});
         const price=p.price?.canonical_amount ?? p.price ?? 0;
         const balance=await getBalance(id);
         const confirm=new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`confirm_buy:${pid}`).setLabel("Konfirmasi Beli").setEmoji("✅").setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId("shop_products").setLabel("Kembali").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
         );
-        return i.reply({
-          ephemeral:true,
+        return i.editReply({
           embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("🧾 Konfirmasi Pembelian")
             .addFields(
               {name:"Produk",value:`**${p.name}**`,inline:false},
@@ -425,3 +445,4 @@ async function startDiscord(){
 startDiscord();
 
 app.listen(process.env.PORT||3000,()=>console.log(`Dashboard: http://localhost:${process.env.PORT||3000}`));
+
