@@ -99,7 +99,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     order:row=>row.provider_order_id?db.prepare('SELECT * FROM orders WHERE provider_order_id=? AND discord_id=?').get(row.provider_order_id,row.discord_id):null,
     recent:userId=>db.prepare('SELECT * FROM direct_purchases WHERE discord_id=? ORDER BY created_at DESC,rowid DESC LIMIT 5').all(userId)};
 }
-function createDirectHandler({discord,direct,payments,language=()=>'id'}) {
+function createDirectHandler({discord,direct,payments,language=()=>'id',otpPanel=null}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const money=v=>Number(v).toLocaleString('id-ID')+' IDR';
   const t=(user,id,en)=>language(user)==='en'?en:id;
@@ -107,6 +107,7 @@ function createDirectHandler({discord,direct,payments,language=()=>'id'}) {
   function statusBody(row) {
     const order=direct.order(row),user=row.discord_id;
     if(row.state==='fulfilled' && order?.refunded)return {content:t(user,`Pesanan ${order.provider_order_id} dibatalkan. ${money(order.amount)} sudah dikembalikan ke saldo bot.`,`Order ${order.provider_order_id} cancelled. ${money(order.amount)} has been refunded to your store balance.`),components:[]};
+    if(row.state==='fulfilled' && order && otpPanel){const p=otpPanel(order.provider_order_id,user);return {...p,content:t(user,'✅ Pembayaran diterima • '+row.name+' • '+money(row.amount),'✅ Payment received • '+row.name+' • '+money(row.amount))+'\n\n'+p.content};}
     if(row.state==='fulfilled' && order)return {content:t(user,`✅ Pembayaran diterima dan pesanan berhasil.\nProduk: **${row.name}**\nHarga: **${money(row.amount)}**\nNomor: **${order.phone}**\nOrder: ${order.provider_order_id}`,`✅ Payment received and order created.\nProduct: **${row.name}**\nPrice: **${money(row.amount)}**\nPhone: **${order.phone}**\nOrder: ${order.provider_order_id}`),components:[new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('check_otp:'+order.provider_order_id).setLabel('Cek OTP').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('cancel_order:'+order.provider_order_id).setLabel('Batalkan').setStyle(ButtonStyle.Danger))]};

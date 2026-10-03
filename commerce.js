@@ -6,7 +6,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{},c
   for(const name of ['platform_id','country_id','operator_id','product_name'])if(!columns.includes(name))db.exec(`ALTER TABLE orders ADD COLUMN ${name} TEXT`);
   for(const [name,type] of Object.entries({voucher_code:"TEXT",discount_amount:"INTEGER NOT NULL DEFAULT 0",original_amount:"INTEGER"}))if(!db.prepare("PRAGMA table_info(orders)").all().some(c=>c.name===name))db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${type}`);
   if(!columns.includes('is_owner_test'))db.exec('ALTER TABLE orders ADD COLUMN is_owner_test INTEGER NOT NULL DEFAULT 0');
-  let coupons,isOwner=()=>false;
+  let otpPolicy=null,coupons,isOwner=()=>false;
   const checkouts=new Map();const locks=new Set();const cancelLocks=new Set();
   function quote(userId,product) {
     for(const [key,c] of checkouts)if(c.expires<Date.now())checkouts.delete(key);
@@ -57,6 +57,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{},c
     if(cancelLocks.has(String(orderId)))throw new Error('Pembatalan sedang diproses.');
     cancelLocks.add(String(orderId));
     try {
+      if(otpPolicy)await otpPolicy.assertCancel(order);
       await smsCancel(orderId);
       return db.transaction(()=>{
         const updated=db.prepare("UPDATE orders SET status='CANCELED',refunded=1 WHERE id=? AND refunded=0").run(order.id);
@@ -66,7 +67,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{},c
       })();
     } finally {cancelLocks.delete(String(orderId));}
   }
-  return {quote,buy,cancel,async ownerBuy(userId,token){const q=checkouts.get(token);if(!isOwner(userId)||!q?.ownerOnly)throw Error('Hanya konfirmasi saldo provider owner yang boleh diproses.');return buy(userId,token);},setOwnerAccess:check=>isOwner=check,ownerQuote(userId,product){if(!isOwner(userId))throw Error('Hanya owner boleh memakai saldo provider.');const q=quote(userId,product),saved=checkouts.get(q.token);Object.assign(saved,{ownerOnly:true,amount:0,name:'[OWNER] '+saved.name});return {...q,amount:0};},setCoupons:engine=>coupons=engine,
+  return {setOTPPolicy:policy=>otpPolicy=policy,quote,buy,cancel,async ownerBuy(userId,token){const q=checkouts.get(token);if(!isOwner(userId)||!q?.ownerOnly)throw Error('Hanya konfirmasi saldo provider owner yang boleh diproses.');return buy(userId,token);},setOwnerAccess:check=>isOwner=check,ownerQuote(userId,product){if(!isOwner(userId))throw Error('Hanya owner boleh memakai saldo provider.');const q=quote(userId,product),saved=checkouts.get(q.token);Object.assign(saved,{ownerOnly:true,amount:0,name:'[OWNER] '+saved.name});return {...q,amount:0};},setCoupons:engine=>coupons=engine,
     applyCoupon(userId,token,code){const q=this.checkout(userId,token);const d=coupons.discount(userId,code,q);const saved=checkouts.get(token);Object.assign(saved,{originalAmount:d.originalAmount,amount:d.amount,discount:d.discount,coupon:d.code});return {...saved};},
     claimCoupon(userId,q,reference,invoice){coupons?.claim(userId,q,reference,invoice);},checkout(userId,token,consume=false){
     const q=checkouts.get(token);

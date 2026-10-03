@@ -1,3 +1,4 @@
+const {createOTPLifecycle,createOTPLifecycleHandler}=require('./otp-lifecycle');
 const {createStorageHealth}=require('./storage-health');
 const {createShopUpgrades,createShopUpgradesHandler,createBuyerGameCheckHandler}=require('./shop-upgrades');
 const {protectOwnerInteraction}=require('./owner-privacy');
@@ -86,10 +87,12 @@ const pricing=createPricing(db);
 let storeFeatures,upgrades;
 const checkPurchase=(...args)=>upgrades?.checkPurchase(...args);
 const assertStoreOpen=()=>storeFeatures?.assertOpen();
+const otpLifecycle=createOTPLifecycle({db,fetchOrder:smsOrder,resendOrder:id=>smscode("/orders/resend",{method:"POST",body:JSON.stringify({id:Number(id)})})});
 const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen,checkPurchase});
 app.use(express.json({verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
 let direct,manualProducts;
 const payments=createPayments({diagnostics,db,onSettled:payment=>payment.order_id.startsWith('manual-buy-')?manualProducts.fulfillPayment(payment):direct.fulfill(payment)});
+commerce.setOTPPolicy(otpLifecycle);
 direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen,checkPurchase});
 payments.mount(app);
 const directPoll=setInterval(()=>direct.poll().catch(console.error),30000);
@@ -176,22 +179,24 @@ function catalogPage(products, requestedPage=0){
 function productAvailable(p){ return Boolean(p.active) && Number(p.available)>0; }
 
 async function smsCreateOrder(productId){
-  return smscode("/orders/create", {
+  const result=await smscode("/orders/create", {
     method:"POST",
     headers:{"Idempotency-Key":uuidKey()},
     body:JSON.stringify({product_id:Number(productId), quantity:1})
   });
+  for(const order of result.data?.orders||[])otpLifecycle.observe(order);return result;
 }
 
 async function smsOrder(orderId){
-  return smscode(`/orders/${encodeURIComponent(orderId)}`);
+  const r=await smscode(`/orders/${encodeURIComponent(orderId)}`);if(r.data&&String(r.data.id)===String(orderId))if(otpLifecycle.observe(r.data)?.revision>r.data.sms_revision)throw Error("Respons SMS lama diabaikan. Coba lagi.");return r;
 }
 
 async function smsCancel(orderId){
-  return smscode("/orders/cancel", {
+  const result=await smscode("/orders/cancel", {
     method:"POST",
     body:JSON.stringify({id:Number(orderId)})
   });
+  if(result.data?.status!=="CANCELED"||String(result.data?.order_id)!==String(orderId))throw Error("Pembatalan belum dikonfirmasi provider; saldo belum dikembalikan.");return result;
 }
 
 app.get("/api/products",async(req,res)=>{
@@ -350,6 +355,7 @@ async function startDiscord(){
   const toolkit=createShopTools({db,staff,language:id=>languages.get(id),payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
   const shopHealth=createShopHealth({diagnostics,db,staff,payments,language:id=>languages.get(id),products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
   const handleBuyerGameCheck=createBuyerGameCheckHandler({discord:require("discord.js"),model:upgrades});
+  const handleOTPLifecycle=createOTPLifecycleHandler({discord:require("discord.js"),model:otpLifecycle,commerce});
   const handleUpgrades=createShopUpgradesHandler({discord:require("discord.js"),model:upgrades,staff,tools:toolkit,digiflazz,smscode,efficiency});
   const upgradeAlertsPoll=setInterval(()=>upgrades.pollAlerts().catch(console.error),60000);upgradeAlertsPoll.unref();upgrades.pollAlerts().catch(console.error);
   const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
@@ -378,7 +384,7 @@ async function startDiscord(){
   const handleSMSWebhook=createSMSCodeWebhookHandler({staff});
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess,resolveChannel:id=>client.channels.fetch(id),resolveRole:async(guildId,roleId)=>(await client.guilds.fetch(guildId)).roles.fetch(roleId)});
-  const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments,language:id=>languages.get(id)});
+  const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments,language:id=>languages.get(id),otpPanel:handleOTPLifecycle.panel});
   const handleStoreFeatures=createStoreFeatureHandler({discord:require("discord.js"),features:storeFeatures,staff});
   const handleDigiflazz=createDigiflazzHandler({discord:require("discord.js"),model:digiflazz,getBalance,staff});
   direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(languages.translate(withHome(handleDirect.status(row)),row.discord_id,'delivery'));});
@@ -395,6 +401,7 @@ async function startDiscord(){
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
+      if(await handleOTPLifecycle(i))return;
       if(await handleBuyerGameCheck(i))return;
       if(await handleUpgrades(i))return;
       if(i.customId==='admin_balance_save'&&!staff.isOwner(i.user.id)&&upgrades.settings().approvalThreshold>0&&Number(i.fields.getTextInputValue('amount'))>=upgrades.settings().approvalThreshold){await i.deferReply({ephemeral:true});const p=await upgrades.requestCredit(i);await i.editReply({content:'Pengajuan '+p.id+' menunggu owner di Dashboard Owner → Pengajuan Saldo. Saldo belum ditambahkan.',allowedMentions:{parse:[]}});return;}
@@ -462,21 +469,7 @@ async function startDiscord(){
           await i.deferReply({ephemeral:true});
           try{
             const {order,amount}=await commerce.buy(id,token);
-            const buttons=new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId(`check_otp:${order.id}`).setLabel("Cek OTP").setEmoji("🔢").setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId(`cancel_order:${order.id}`).setLabel("Batalkan").setEmoji("❌").setStyle(ButtonStyle.Danger)
-            );
-            return i.editReply({
-              embeds:[new EmbedBuilder().setColor(0x57F287).setTitle("✅ Order Berhasil")
-                .addFields(
-                  {name:"Order",value:`\`${order.id}\``,inline:true},
-                  {name:"Nomor",value:`**${order.phone_number}**`,inline:true},
-                  {name:"Harga",value:`**${money(amount)}**`,inline:true},
-                  {name:"Status",value:`**${order.status}**`,inline:true}
-                )
-                .setDescription("OTP akan dikirim melalui DM saat masuk. Tombol **Cek OTP** tetap tersedia jika DM tidak diterima.")],
-              components:[buttons]
-            });
+            const panel=handleOTPLifecycle.panel(String(order.id),id);panel.content='✅ Order berhasil • Harga: '+money(amount)+'\nOTP dikirim melalui DM saat masuk.\n\n'+panel.content;return i.editReply(panel);
           }catch(e){
             const owner=/saldo tidak cukup/i.test(e.message)?staff.contactIds(i.guildId)[0]:null;
             if(owner)return i.editReply({content:'❌ '+e.message+' Tekan Hubungi Admin untuk isi saldo melalui DM.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Hubungi Admin').setStyle(ButtonStyle.Link).setURL('https://discord.com/users/'+owner))]});
@@ -484,35 +477,7 @@ async function startDiscord(){
           }
         }
 
-        if(i.customId.startsWith("check_otp:")){
-          const poid=i.customId.split(":")[1];
-          const order=db.prepare("SELECT * FROM orders WHERE provider_order_id=? AND discord_id=?").get(poid,id);
-          if(!order) return i.reply({ephemeral:true,content:"Order tidak ditemukan."});
-          await i.deferReply({ephemeral:true});
-          try{
-            const result=await smsOrder(poid), d=result.data;
-            db.prepare("UPDATE orders SET otp=?,status=?,phone=? WHERE id=?")
-              .run(d.otp_code||null,d.status||"ACTIVE",d.phone_number||order.phone,order.id);
-            if(d.otp_code){
-              return i.editReply({embeds:[new EmbedBuilder().setColor(0x57F287).setTitle("🔢 OTP Diterima")
-                .addFields({name:"Nomor",value:`\`${d.phone_number||order.phone}\``,inline:true},{name:"OTP",value:`**${d.otp_code}**`,inline:true})
-                .setDescription("Gunakan kode tersebut pada layanan yang Anda beli.") ]});
-            }
-            return i.editReply({embeds:[new EmbedBuilder().setColor(0xFEE75C).setTitle("⏳ OTP Belum Masuk")
-              .setDescription(`Status: **${d.status}**\nNomor: **${d.phone_number||order.phone}**\n\nTekan **Cek OTP** lagi beberapa saat kemudian.`)]});
-          }catch(e){return i.editReply("❌ Gagal mengecek OTP: "+e.message);}
-        }
 
-        if(i.customId.startsWith("cancel_order:")){
-          const poid=i.customId.split(":")[1];
-          const order=db.prepare("SELECT * FROM orders WHERE provider_order_id=? AND discord_id=?").get(poid,id);
-          if(!order) return i.reply({ephemeral:true,content:"Order tidak ditemukan."});
-          await i.deferReply({ephemeral:true});
-          try{
-            const refund=await commerce.cancel(poid,id);
-            return i.editReply(`✅ Order dibatalkan. **${money(refund)}** dikembalikan ke saldo.`);
-          }catch(e){return i.editReply("❌ Tidak dapat membatalkan order: "+e.message);}
-        }
       }
 
       if((i.isButton() && (i.customId.startsWith("pick_product:") || i.customId.startsWith('buy_again:'))) || (i.isStringSelectMenu() && i.customId==="buy_product")){
