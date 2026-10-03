@@ -164,6 +164,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     return modal;
   }
   return async function handleAdmin(i) {
+    if(['admin_health','admin_test_otp','admin_payment_issues'].includes(i.customId))return false;
     const command=i.isChatInputCommand() && i.commandName==='admin';
     const pingCommand=i.isChatInputCommand() && i.commandName==='ping';
     if(!command && !pingCommand && !String(i.customId || '').startsWith('admin_')) return false;
@@ -172,7 +173,6 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       return true;
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
-    if(['admin_test_otp','admin_health'].includes(i.customId)&&staff&&!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Hanya owner dapat melihat saldo dan membeli langsung dari provider.'});return true;}
     if(pingCommand || i.isButton()) {
       if(pingCommand || i.customId==='admin_bot_ping'){
         const started=Date.now();await i.deferReply({ephemeral:true});const metrics=measureHealth();
@@ -180,9 +180,6 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         const ms=n=>Number.isFinite(n)&&n>=0?n.toFixed(1)+' ms':'Belum tersedia';
         const ping=metrics.discord,quality=!Number.isFinite(ping)||ping<0?'Menunggu koneksi':ping<150?'Cepat':ping<300?'Cukup responsif':'Latensi tinggi';
         await i.editReply({content:`**📡 Ping & Kecepatan Bot**\nKoneksi Discord: **${ms(ping)}** • ${quality}\nProses hingga respons awal: **${ms(Date.now()-started)}**\nAkses database: **${ms(metrics.database)}**\nRAM proses: **${Number.isFinite(metrics.ram)?metrics.ram.toFixed(1)+' MB':'Belum tersedia'}**\nWaktu berjalan: **${Math.floor(process.uptime()/60)} menit**\n\nLatensi lebih rendah berarti respons lebih cepat. Nilai koneksi berasal dari heartbeat Discord.`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_bot_ping').setLabel('Tes Ulang').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_data').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
-      }
-      if(i.customId==='admin_test_otp'){
-        await i.reply({ephemeral:true,content:'**Tes Pembelian OTP — Admin**\n\nTes menggunakan nomor SMSCode sungguhan. Pilih aplikasi, negara, operator, dan produk; harga ditampilkan sebelum Anda mengonfirmasi pembayaran.\n\nPembayaran memakai saldo akun admin atau QRIS yang tersedia. Saldo provider SMSCode juga harus cukup. Menekan Mulai Tes belum membeli nomor.\n\nSetelah order berhasil, gunakan nomor pada layanan yang dipilih untuk meminta SMS. Bot akan memperbarui status/OTP melalui webhook atau polling cadangan, lalu mengirim OTP ke DM akun admin yang membeli.\n\nOrder tetap tercatat di Riwayat OTP dan Riwayat Pesanan. Ini bukan transaksi gratis/simulasi; aturan pembatalan dan refund biasa tetap berlaku.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_products').setLabel('Mulai Tes Pembelian OTP').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
       }
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(await buyerBalances(Number(i.customId.split(':')[1]),i.customId.split(':')[2]||'all'));return true;
@@ -211,11 +208,6 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         await hydrateBuyers(rows.map(r=>r.discord_id));
         await i.reply({ephemeral:true,content:rows.length?rows.map(r=>`Pembeli: ${buyerLabel(r.discord_id)}\nTambah: ${amount(r.amount)} • Saldo setelah transaksi: ${amount(r.balance_after)}\nAdmin: ${r.admin_id} • ${r.created_at} UTC\nCatatan: ${r.note}`).join('\n\n'):'Belum ada penambahan saldo manual.',allowedMentions:{parse:[]}});return true;
       }
-      if(i.customId==='admin_payment_issues') {
-        const rows=db.prepare("SELECT * FROM direct_purchases WHERE state='review' ORDER BY created_at DESC LIMIT 5").all();
-        await hydrateBuyers(rows.map(r=>r.discord_id));
-        await i.reply({ephemeral:true,content:rows.length?rows.map(r=>`Tagihan: ${r.invoice_id}\nPembeli: ${buyerLabel(r.discord_id)}\nProduk: ${r.product_id} • ${amount(r.amount)}\nOrder provider: ${r.provider_order_id || 'Belum diketahui'}\n${r.error}`).join('\n\n'):'Tidak ada pembayaran yang perlu diperiksa.'});return true;
-      }
       if(i.customId==='admin_pricing') {
         const settings=pricing.get();
         await i.showModal(new ModalBuilder().setCustomId('admin_pricing_save').setTitle('Atur Harga Jual Semua Layanan')
@@ -233,17 +225,6 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       else if(i.customId==='admin_home') await i.update(home());
       else if(i.customId==='admin_close') await i.update({content:'Panel admin ditutup. Ketik /admin untuk membukanya kembali.',embeds:[],components:[]});
       else if(i.customId.startsWith('admin_products:')) await i.update(products(Number(i.customId.split(':')[1])));
-      else if(i.customId==='admin_health') {
-        await i.deferReply({ephemeral:true});
-        try {
-          const result=await smscode('/balance');
-          const balance=result.data?.balance;
-          const canonical=balance && typeof balance==='object'?balance.canonical_amount:balance;
-          await i.editReply({content:`✅ SMSCode terhubung.\nSaldo provider: ${canonical == null?'Tidak tersedia':amount(canonical)}`});
-        } catch {
-          await i.editReply({content:'❌ Koneksi SMSCode gagal. Periksa konfigurasi token/API dan coba lagi.'});
-        }
-      }
       return true;
     }
     if(i.isStringSelectMenu() && i.customId==='admin_edit') {

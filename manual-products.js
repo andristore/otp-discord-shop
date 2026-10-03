@@ -205,6 +205,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
   async function notify(o){await model.notify(o);return !!model.getOrder(o.discord_id,o.id).notified;}
   return async function handle(i) {
     const id=String(i.customId || ''),admin=id.startsWith('admin_manual_');
+    if(id.startsWith('manual_orders:'))return false; // Legacy buttons are handled by unified order history.
     if(!admin && !id.startsWith('manual_') && id!=='shop_manual_products')return false;
     if(admin&&!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     const user=i.user.id,parts=id.split(':'),key=parts[0],arg=parts[1];
@@ -231,7 +232,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
       if(!i.isButton())return false;
       if(id==='shop_manual_products')await i.reply({ephemeral:true,...catalog(user,0,false)});
       else if(key==='manual_catalog' || key==='admin_manual_catalog')await i.update(catalog(user,Number(arg),admin));
-      else if(key==='manual_orders' || key==='admin_manual_orders')await i.reply({ephemeral:true,...orders(user,Number(arg),admin)});
+      else if(key==='admin_manual_orders')await i.reply({ephemeral:true,...orders(user,Number(arg),admin)});
       else if(key==='manual_detail' || key==='admin_manual_detail'){const p=model.product(arg);if(!admin&&!p.enabled)throw Error('Produk sedang nonaktif.');await i.update(detail(p,admin,user));}
       else if(id==='admin_manual_search')await i.showModal(modal('admin_manual_search_submit','Cari Produk',[['query','Nama produk / varian','',80]]));
       else if(key==='admin_manual_search_page')await i.update(searchView(user,arg,Number(parts[2]||0)));

@@ -95,7 +95,8 @@ app.use(session({
   resave: false, saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: "lax", secure: webSecurity.secure, maxAge: 3600000 }
 }));
-app.use("/api/admin",webSecurity.originGuard);
+// Cover every authenticated dashboard mutation, including order and balance endpoints.
+app.use("/api",webSecurity.originGuard);
 app.use(express.static("public"));
 
 function admin(req,res,next){
@@ -181,13 +182,6 @@ async function smsOrder(orderId){
 
 async function smsCancel(orderId){
   return smscode("/orders/cancel", {
-    method:"POST",
-    body:JSON.stringify({id:Number(orderId)})
-  });
-}
-
-async function smsFinish(orderId){
-  return smscode("/orders/finish", {
     method:"POST",
     body:JSON.stringify({id:Number(orderId)})
   });
@@ -436,16 +430,6 @@ async function startDiscord(){
                 "Jika order gagal, hubungi admin toko."
               )],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_guide').setLabel('Panduan Pembeli Baru').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('shop_refund_guide').setLabel('Panduan Refund').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('tool_ticket_new').setLabel('Buat Tiket Bantuan').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('tool_tickets:0').setLabel('Tiket Saya').setStyle(ButtonStyle.Primary))]
           });
-        }
-
-        if(i.customId==="shop_order_history"){
-          const rows=db.prepare(`SELECT o.id,o.product_name,o.provider_order_id,o.phone,o.status,o.amount,o.created_at,
-            p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id
-            WHERE o.discord_id=? ORDER BY o.id DESC LIMIT 10`).all(id);
-          if(!rows.length) return i.reply({ephemeral:true,content:"Anda belum memiliki pesanan."});
-          const desc=rows.map(o=>`**#${o.provider_order_id}** • ${o.product_name||o.name||"OTP"}\n📱 ${o.phone||"-"} • ${o.status} • ${money(o.amount)}`).join("\n\n");
-          const repeatRows=[];for(let n=0;n<rows.length;n+=5)repeatRows.push(new ActionRowBuilder().addComponents(...rows.slice(n,n+5).map(o=>new ButtonBuilder().setCustomId('buy_again:'+o.id).setLabel(('Beli Lagi • '+o.provider_order_id).slice(0,80)).setStyle(ButtonStyle.Secondary))));
-          return i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("📦 Pesanan Saya").setDescription(desc)],components:repeatRows});
         }
 
         if(i.customId.startsWith("confirm_buy:")){

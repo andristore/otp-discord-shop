@@ -114,7 +114,7 @@ function createDirectHandler({discord,direct,payments,language=()=>'id'}) {
   function checkRow(id){return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('direct_check:'+id).setLabel('Cek Pembayaran & Pesanan').setStyle(ButtonStyle.Success));}
   async function handler(i) {
     const id=String(i.customId || '');
-    if(!id.startsWith('qris_buy:') && !id.startsWith('direct_email:') && !id.startsWith('direct_check:') && id!=='direct_history')return false;
+    if(!id.startsWith('qris_buy:') && !id.startsWith('direct_email:') && !id.startsWith('direct_check:'))return false;
     if(id.startsWith('qris_buy:') && payments.active?.(i.user.id)){await i.reply({ephemeral:true,content:'Masih ada tagihan QRIS aktif. Lanjutkan tagihan sebelumnya.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Buka Tagihan Aktif').setStyle(ButtonStyle.Primary))]});return true;}
     if(id.startsWith('qris_buy:')) {
       if(!payments.configured){await i.reply({ephemeral:true,content:'QRIS belum dikonfigurasi oleh admin.'});return true;}
@@ -123,9 +123,7 @@ function createDirectHandler({discord,direct,payments,language=()=>'id'}) {
     }
     await i.deferReply({ephemeral:true});
     try {
-      if(id==='direct_history') {
-        const rows=direct.recent(i.user.id);await i.editReply({content:rows.length?'Pilih pembayaran pembelian untuk melihat status atau mengambil pesanan.':'Belum ada pembayaran QRIS pembelian.',components:rows.length?[new ActionRowBuilder().addComponents(...rows.map(r=>new ButtonBuilder().setCustomId('direct_check:'+r.invoice_id).setLabel(`${money(r.amount)} • ${r.state}`).setStyle(ButtonStyle.Secondary)))]:[]});
-      }else if(id.startsWith('direct_check:')) {
+      if(id.startsWith('direct_check:')) {
         const invoice=id.slice(13);const row=await direct.refresh(invoice,i.user.id);const payment=payments.get(invoice,i.user.id);
         const response=status(row);
         if(row.state==='pending') {

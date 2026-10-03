@@ -13,9 +13,25 @@ function buttonColor(button) {
   return {...button, style};
 }
 
+// Last check before Discord: duplicate IDs are invalid even on disabled buttons.
+function validateComponents(rows) {
+  if(rows.length>5)throw Error('Menu melebihi batas baris Discord.');
+  const ids=new Set();
+  for(const row of rows){
+    if(!row.components.length||row.components.length>5)throw Error('Jumlah tombol pada baris menu tidak valid.');
+    if(row.components.some(c=>[3,5,6,7,8].includes(c.type))&&row.components.length!==1)throw Error('Pilihan dropdown harus berada pada baris sendiri.');
+    for(const c of row.components){
+      if(!c.custom_id)continue;
+      if(c.custom_id.length>100||ids.has(c.custom_id))throw Error('ID tombol menu tidak valid atau duplikat.');
+      ids.add(c.custom_id);
+    }
+  }
+  return rows;
+}
+
 function withHome(payload, requestedHome) {
   const result = typeof payload === 'string' ? {content: payload} : {...payload};
-  const rows = (result.components || []).map(row => {
+  let rows = (result.components || []).map(row => {
     const data = typeof row.toJSON === 'function' ? row.toJSON() : row;
     return {...data, components: (data.components || []).map(buttonColor)};
   });
@@ -30,11 +46,12 @@ function withHome(payload, requestedHome) {
       return true;
     });
   }
+  rows=rows.filter(row=>row.components.length);
   const ids = new Set(rows.flatMap(row => row.components.map(component => component.custom_id)));
   if (['shop_products', 'shop_balance', 'shop_orders', 'shop_topup', 'shop_help'].every(id => ids.has(id))) {
-    return {...result, components: rows.map(row => ({...row, components: row.components.filter(component => component.custom_id !== HOME_ID)})).filter(row => row.components.length)};
+    return {...result, components: validateComponents(rows.map(row => ({...row, components: row.components.filter(component => component.custom_id !== HOME_ID)})).filter(row => row.components.length))};
   }
-  if (rows.some(row => row.components.some(component => component.custom_id === homeId))) return {...result, components: rows};
+  if (rows.some(row => row.components.some(component => component.custom_id === homeId))) return {...result, components: validateComponents(rows)};
   const button = {type: 2, style: 1, custom_id: homeId, label: homeId === ADMIN_HOME_ID ? 'Menu Awal Admin' : 'Menu Awal', emoji: {name: '🏠'}};
   const available = [...rows].reverse().find(row => row.components.length < 5 && row.components.every(component => component.type === 2));
   if (available) available.components.push(button);
@@ -47,7 +64,7 @@ function withHome(payload, requestedHome) {
     const position = row.components.findIndex(component => ['shop_products', 'provider_catalog'].includes(component.custom_id));
     row.components[position] = button;
   }
-  return {...result, components: rows};
+  return {...result, components: validateComponents(rows)};
 }
 
 function addHomeNavigation(interaction) {
