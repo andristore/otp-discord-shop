@@ -67,6 +67,7 @@ function createOrderHistoryHandler({discord,model,payments}){
     }else content+='\nBukti pembayaran saldo internal toko.';
     if(o.kind==='digital'){
      if(o.state==='completed'&&o.delivery)content+=`\n\n**Data Produk**\n${safe(o.delivery)}`;
+     actions.push(button('manual_repeat:'+o.id,'Beli Lagi'));
     }else if(o.provider_order_id){
      content+=`\nOrder OTP: ${safe(o.provider_order_id)}\nNomor: ${safe(o.phone||'-')}\nOTP: ${safe(o.otp||'Belum diterima')}`;
      actions.push(button('check_otp:'+o.provider_order_id,'Cek OTP',3));

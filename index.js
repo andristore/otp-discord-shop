@@ -377,6 +377,11 @@ async function startDiscord(){
           });
         }
 
+        if(i.customId==="shop_guide"){
+          return i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle("Panduan Pembeli Baru")
+            .setDescription("1. Pilih **Beli OTP** atau **Produk Lainnya**.\n2. Baca deskripsi dan harga, lalu konfirmasi.\n3. Bayar memakai saldo toko atau QRIS jika tersedia. Isi saldo minimal **5.000 IDR**.\n4. QRIS belum terkonfirmasi? Buka **Pesanan → Invoice → Cek Pembayaran & Pesanan**. Gunakan tagihan yang sama.\n5. Produk otomatis dan OTP dikirim melalui DM. Aktifkan izin DM dari anggota server. Produk yang diproses admin mengikuti waktu pada deskripsi.\n6. Lihat hasil melalui **Pesanan → Riwayat Pesanan**. Tombol **Beli Lagi** membuka konfirmasi baru dengan harga terbaru.")],
+            components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_help').setLabel('Kembali').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('shop_home').setLabel('Menu Awal').setStyle(ButtonStyle.Primary))]});
+        }
         if(i.customId==="shop_help"){
           return i.reply({
             ephemeral:true,
@@ -389,7 +394,7 @@ async function startDiscord(){
                 "4. Nomor akan diberikan\n" +
                 "5. OTP dikirim melalui DM saat masuk; **Cek OTP** tetap tersedia\n\n" +
                 "Jika order gagal, hubungi admin toko."
-              )],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_refund_guide').setLabel('Panduan Refund').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('tool_ticket_new').setLabel('Buat Tiket Bantuan').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('tool_tickets:0').setLabel('Tiket Saya').setStyle(ButtonStyle.Primary))]
+              )],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_guide').setLabel('Panduan Pembeli Baru').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('shop_refund_guide').setLabel('Panduan Refund').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('tool_ticket_new').setLabel('Buat Tiket Bantuan').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('tool_tickets:0').setLabel('Tiket Saya').setStyle(ButtonStyle.Primary))]
           });
         }
 

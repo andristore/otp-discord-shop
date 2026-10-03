@@ -75,6 +75,11 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     const reason=maintenance()?'Toko sedang maintenance.':!p.enabled?'Produk sedang nonaktif.':p.quantity===0?'Stok jual habis.':!p.auto_enabled?'Pengiriman produk masih diproses admin.':!data?'Data Produk siap kirim belum tersedia.':'';
     return {product:p,ready:!reason,reason,body:!reason?data.body:'',quantity:sellStock(p),dataCount:stockCount(id)};
   }
+  function preview(user,id){
+    admin(user);const p=product(id),data=db.prepare("SELECT body FROM manual_product_stock WHERE product_id=? AND state='available' ORDER BY id LIMIT 1").get(id);
+    if(!data)throw Error('Belum ada Data Produk tersedia untuk pratinjau.');
+    return {product:p,body:data.body};
+  }
   const toggleAuto=db.transaction((user,id)=>{admin(user);const p=product(id);if(!p.auto_enabled&&!stockCount(id))throw Error('Tambahkan stok data terlebih dahulu.');db.prepare('UPDATE manual_products SET auto_enabled=? WHERE id=?').run(p.auto_enabled?0:1,id);audit(user,'Ubah kirim otomatis produk #'+id);return product(id);});
   function reserveStock(o){const p=product(o.product_id);if(p.quantity!==null){if(!db.prepare('UPDATE manual_products SET quantity=quantity-1 WHERE id=? AND quantity>0').run(p.id).changes)throw Error('Stok jual habis.');db.prepare('UPDATE manual_product_orders SET quantity_reserved=1 WHERE id=?').run(o.id);}if(!o.automatic)return;const s=db.prepare("SELECT id FROM manual_product_stock WHERE product_id=? AND state='available' ORDER BY id LIMIT 1").get(o.product_id);if(!s)throw Error('Stok data habis. Pilih produk lain.');db.prepare("UPDATE manual_product_stock SET state='reserved',order_id=? WHERE id=? AND state='available'").run(o.id,s.id);}
   function deliverStock(o){if(!o.automatic)return;const s=db.prepare("SELECT * FROM manual_product_stock WHERE order_id=? AND state='reserved'").get(o.id);if(!s)throw Error('Stok pesanan perlu diperiksa admin.');db.prepare("UPDATE manual_product_stock SET state='sold' WHERE id=?").run(s.id);db.prepare("UPDATE manual_product_orders SET state='completed',delivery=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(s.body,o.id);}
@@ -139,7 +144,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(o.discord_id,o.amount);
     restoreQuantity(o);db.prepare("UPDATE manual_product_orders SET state='refunded',admin_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(user,id);audit(user,'Refund pesanan manual '+id);return getOrder(user,id,true);
   });
-  return {catalog,product,testPreview,remove,save,quote,buy,orders,getOrder,finish,refund,stockCount,sellStock,stocks,stock,saveStock,saveWithStock,createWithStock,toggleAuto,createQR,refresh,fulfillPayment,poll,notify,setNotifier:fn=>notifier=fn,orderByInvoice:(user,id)=>{const o=db.prepare('SELECT * FROM manual_product_orders WHERE invoice_id=? AND discord_id=?').get(id,user);if(!o)throw Error('Tagihan tidak ditemukan.');return o;},payment:o=>payments?.get(o.invoice_id,o.discord_id),qrisConfigured:()=>!!payments?.configured};
+  return {catalog,product,preview,testPreview,remove,save,quote,buy,orders,getOrder,finish,refund,stockCount,sellStock,stocks,stock,saveStock,saveWithStock,createWithStock,toggleAuto,createQR,refresh,fulfillPayment,poll,notify,setNotifier:fn=>notifier=fn,orderByInvoice:(user,id)=>{const o=db.prepare('SELECT * FROM manual_product_orders WHERE invoice_id=? AND discord_id=?').get(id,user);if(!o)throw Error('Tagihan tidak ditemukan.');return o;},payment:o=>payments?.get(o.invoice_id,o.discord_id),qrisConfigured:()=>!!payments?.configured};
 }
 
 function createManualProductsHandler({discord,model,staff,sendDM=async()=>{}}) {
@@ -169,7 +174,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{}}) {
     const p=model.product(id),data=model.stocks(user,id,page,true),components=[];
     for(let n=0;n<data.rows.length;n+=5)components.push(row(...data.rows.slice(n,n+5).map(s=>button('admin_manual_stock_edit:'+s.id,`Data Produk #${s.id}`,1))));
     components.push(row(button('admin_manual_delivery_data:'+id+':'+(data.page-1),'Sebelumnya',1).setDisabled(data.page===0),button('admin_manual_delivery_data:'+id+':'+(data.page+1),'Berikutnya',1).setDisabled(data.page===data.pages-1),button('admin_manual_edit:'+id,'Kembali',1),home(true)));
-    components.push(row(button('admin_manual_stock_add:'+id,'Tambah Data Produk',3),button('admin_manual_quantity:'+id,'Atur Stok Jual',1)));
+    components.push(row(button('admin_manual_stock_add:'+id,'Tambah Data Produk',3),button('admin_manual_quantity:'+id,'Atur Stok Jual',1),button('admin_manual_preview:'+id,'Pratinjau Pesan',1)));
     return {content:'',embeds:[embed('Data Produk • '+p.name,`Stok jual: **${model.sellStock(p)}**\nData siap kirim: **${data.count}**\n\n${data.count?'Pilih data untuk mengubah akun atau kode.':'Belum ada data siap kirim. Tekan Tambah Data Produk.'}\nSatu data unik untuk satu pembeli.\nHalaman ${data.page+1}/${data.pages}`)],components};
   }
   function modal(id,title,fields){return new ModalBuilder().setCustomId(id).setTitle(title).addComponents(...fields.map(([key,label,value,max,long,required=true])=>{const input=new TextInputBuilder().setCustomId(key).setLabel(label).setStyle(long?TextInputStyle.Paragraph:TextInputStyle.Short).setRequired(required).setMaxLength(max);if(String(value))input.setValue(String(value));return row(input);}));}
@@ -232,7 +237,13 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{}}) {
       }
       else if(key==='admin_manual_auto')await i.update(detail(model.toggleAuto(user,arg),true));
       else if(key==='admin_manual_toggle'){const p=model.product(arg);await i.update(detail(model.save(user,arg,{...p,enabled:p.enabled?0:1}),true));}
-      else if(key==='manual_quote'){const p=model.quote(user,arg);await i.update({content:'',embeds:[embed('Konfirmasi Pembelian Manual',`Pembeli: ${buyerLabel(user)}\nProduk: ${safe(p.name)}\n${safe(p.description)}\n\nHarga: **${money(p.price)}**\nPilih pembayaran saldo atau QRIS. ${p.auto_enabled?'Data dikirim otomatis setelah pembayaran terverifikasi.':'Admin akan memproses pesanan setelah pembayaran.'} Konfirmasi berlaku 15 menit.`)],allowedMentions:{parse:[]},components:[row(button('manual_buy:'+p.token,'Bayar Saldo',3),button('manual_qris:'+p.token,'Bayar QRIS',3).setDisabled(!model.qrisConfigured()||p.price<1000),button('manual_detail:'+p.id,'Kembali',1),home(false))]});}
+      else if(key==='admin_manual_preview'){
+        const t=model.preview(user,arg);
+        await i.reply({ephemeral:true,content:'Pratinjau pribadi admin. Data tetap tersedia; belum ada pesan dikirim ke pembeli.',embeds:[embed('Hasil / keterangan pengiriman',safe(t.body))],allowedMentions:{parse:[]},components:[row(button('admin_manual_delivery_data:'+t.product.id+':0','Kembali',1),home(true))]});
+      }
+      else if(key==='manual_quote'||key==='manual_repeat'){
+        const productId=key==='manual_repeat'?model.getOrder(user,arg).product_id:arg;
+        const p=model.quote(user,productId);await i.update({content:'',embeds:[embed('Konfirmasi Pembelian Manual',`Pembeli: ${buyerLabel(user)}\nProduk: ${safe(p.name)}\n${safe(p.description)}\n\nHarga: **${money(p.price)}**\nPilih pembayaran saldo atau QRIS. ${p.auto_enabled?'Data dikirim otomatis setelah pembayaran terverifikasi.':'Admin akan memproses pesanan setelah pembayaran.'} Konfirmasi berlaku 15 menit.`)],allowedMentions:{parse:[]},components:[row(button('manual_buy:'+p.token,'Bayar Saldo',3),button('manual_qris:'+p.token,'Bayar QRIS',3).setDisabled(!model.qrisConfigured()||p.price<1000),button('manual_detail:'+p.id,'Kembali',1),home(false))]});}
       else if(key==='manual_buy'){const o=model.buy(user,arg);await i.update(order(o,false));await model.notify(o);}
       else if(key==='manual_qris')await i.showModal(modal('manual_qris_email:'+arg,'Email Pembayaran QRIS',[['email','Alamat email tagihan','',254]]));
       else if(key==='manual_invoice_check'){await i.deferReply({ephemeral:true});const current=model.orderByInvoice(user,arg);const o=await model.refresh(user,current.id);await i.editReply(paymentView(o,model.payment(o)));}

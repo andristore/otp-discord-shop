@@ -28,7 +28,19 @@ function createEfficiency({db,staff}){
   const activeWhere="discord_id=? AND refunded=0 AND UPPER(COALESCE(status,'')) NOT IN ('CANCELED','CANCELLED','COMPLETED','EXPIRED','FAILED','REFUNDED')";
   function activeOrders(user,page=0){const count=db.prepare('SELECT COUNT(*) n FROM orders WHERE '+activeWhere).get(user).n,pages=Math.max(1,Math.ceil(count/5));page=Math.min(Math.max(Number.isSafeInteger(page)?page:0,0),pages-1);return {page,pages,count,rows:db.prepare('SELECT * FROM orders WHERE '+activeWhere+' ORDER BY CASE WHEN otp IS NULL OR otp=\'\' THEN 0 ELSE 1 END,id DESC LIMIT 5 OFFSET ?').all(user,page*5)};}
   function order(user,id){const r=db.prepare('SELECT * FROM orders WHERE id=? AND discord_id=?').get(Number(id),user);if(!r)throw new Error('Pesanan tidak ditemukan.');return r;}
-  function summary(user){if(!staff.isAdmin(user))throw new Error('Akses ditolak.');return {manual:db.prepare("SELECT COUNT(*) n FROM manual_topup_requests WHERE status='pending'").get().n,review:db.prepare("SELECT COUNT(*) n FROM direct_purchases WHERE state IN ('review','resolving')").get().n,invoices:db.prepare("SELECT COUNT(*) n FROM topups WHERE gateway IN ('tripay','midtrans') AND credited=0 AND status IN ('creating','pending')").get().n};}
+  function summary(user){
+    if(!staff.isAdmin(user))throw new Error('Akses ditolak.');
+    const hasTable=name=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+    const digital=hasTable('manual_product_orders'),stock=hasTable('manual_products')&&hasTable('manual_product_stock');
+    return {
+      manual:db.prepare("SELECT COUNT(*) n FROM manual_topup_requests WHERE status='pending'").get().n,
+      review:db.prepare("SELECT COUNT(*) n FROM direct_purchases WHERE state IN ('review','resolving')").get().n,
+      invoices:db.prepare("SELECT COUNT(*) n FROM topups WHERE gateway IN ('tripay','midtrans') AND credited=0 AND status IN ('creating','pending')").get().n,
+      processing:digital?db.prepare("SELECT COUNT(*) n FROM manual_product_orders WHERE state='pending'").get().n:0,
+      delivery:digital?db.prepare("SELECT COUNT(*) n FROM manual_product_orders WHERE state='completed' AND notified=0").get().n:0,
+      lowStock:stock?db.prepare("SELECT COUNT(*) n FROM manual_products p WHERE p.deleted=0 AND p.enabled=1 AND ((p.quantity IS NOT NULL AND p.quantity<=3) OR (p.auto_enabled=1 AND (SELECT COUNT(*) FROM manual_product_stock s WHERE s.product_id=p.id AND s.state='available')<=3))").get().n:0
+    };
+  }
   return {save,favorite,remove,favorites,activeOrders,order,summary};
 }
 function createEfficiencyHandler({discord,model,commerce,payments,features,staff,smscode,operations}){
@@ -80,7 +92,7 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
       }else if(id==='admin_eff_summary'){
         const r=model.summary(user);let provider='Hanya owner';if(staff.isOwner?.(user))try{const v=(await smscode('/balance')).data?.balance,b=Number(v && typeof v==='object'?v.canonical_amount:v);if(v!=null && Number.isSafeInteger(b) && b>=0)provider=money(b)+(b<operations.settings().lowThreshold?' ⚠️ di bawah batas peringatan':'');}catch{}
         if(!staff.isAdmin(user))throw new Error('Akses admin sudah dicabut.');
-        await i.editReply({content:`**⚙️ Ringkasan Admin**\nPengajuan manual menunggu: **${r.manual}**\nPembelian perlu pemeriksaan: **${r.review}**\nTagihan QRIS aktif: **${r.invoices}**\nSaldo provider: **${provider}**\nMaintenance: **${features.maintenance()?'AKTIF':'NONAKTIF'}**`,components:[row([['admin_store_requests:0','Periksa Manual'],['admin_payment_issues','Periksa Pembayaran'],['admin_health','Koneksi Provider'],['admin_home','Panel Admin']])]});
+        await i.editReply({content:`**⚙️ Ringkasan Admin**\nPengajuan manual menunggu: **${r.manual}**\nPembelian perlu pemeriksaan: **${r.review}**\nTagihan QRIS aktif: **${r.invoices}**\nProduk menunggu diproses: **${r.processing}**\nPesanan selesai dengan DM belum terkirim: **${r.delivery}**\nProduk stok menipis / habis (≤3): **${r.lowStock}**\nSaldo provider: **${provider}**\nMaintenance: **${features.maintenance()?'AKTIF':'NONAKTIF'}**`,components:[row([['admin_store_requests:0','Periksa Manual'],['admin_payment_issues','Periksa Pembayaran'],['admin_eff_summary','Segarkan']]),row([['admin_manual_orders:0','Periksa Pesanan & DM'],['admin_manual_catalog:0','Periksa Stok'],['admin_home','Panel Admin']])]});
       }
     }catch(e){await i.editReply({content:e.message,allowedMentions:{parse:[]}});}return true;
   };
