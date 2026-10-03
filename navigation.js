@@ -51,7 +51,7 @@ function withHome(payload, requestedHome) {
 }
 
 function addHomeNavigation(interaction) {
-  const homeId = interaction.commandName === 'admin' || /^(admin_|provider_)/.test(String(interaction.customId || '')) ? ADMIN_HOME_ID : HOME_ID;
+  const homeId = ['admin','ping'].includes(interaction.commandName) || /^(admin_|provider_)/.test(String(interaction.customId || '')) ? ADMIN_HOME_ID : HOME_ID;
   for (const method of ['reply', 'editReply', 'update', 'followUp']) {
     if (typeof interaction[method] !== 'function') continue;
     const original = interaction[method].bind(interaction);
