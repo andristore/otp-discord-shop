@@ -35,7 +35,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
   if(!['QRIS','QRISC','QRIS2','QRIS_SHOPEEPAY'].includes(channel))throw new Error('TRIPAY_QRIS_CHANNEL tidak didukung. Gunakan kode channel QRIS aktif di akun TriPay.');
   db.exec(`CREATE TABLE IF NOT EXISTS topups(order_id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
   const columns=new Set(db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name));
-  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT',expires_ms:'INTEGER',provider_status:'TEXT',external_refund_amount:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
+  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT',expires_ms:'INTEGER',provider_status:'TEXT',external_refund_amount:'INTEGER',status_checked_ms:'INTEGER',verified_callback_ms:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
   async function request(path,body,live=production) {
     try{
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
@@ -75,7 +75,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
     if(!reference)throw new Error('Referensi TriPay belum diterima. Tunggu callback atau minta admin memeriksa merchant_ref '+p.order_id+'. Jangan membuat pembayaran ulang dulu.');
     const status=await request('/transaction/detail?reference='+encodeURIComponent(reference),undefined,Boolean(p.production));
     validateStatus(p,status);
-    const updated=apply(status);if(updated.credited && updated.purpose==='purchase' && status.status==='PAID')await onSettled(updated);return {...updated,providerStatus:status.status};
+    const updated=apply(status);db.prepare('UPDATE topups SET status_checked_ms=? WHERE order_id=?').run(Date.now(),orderId);if(updated.credited && updated.purpose==='purchase' && status.status==='PAID')await onSettled(updated);return {...updated,providerStatus:status.status};
   }
   const active=userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND gateway IN ('tripay','midtrans') AND credited=0 AND status IN ('creating','pending') ORDER BY created_at,rowid LIMIT 1").get(userId);
   function assertCanCreate(userId){const p=active(userId);if(p){const e=new Error('Masih ada tagihan QRIS aktif. Buka Tagihan Aktif untuk melanjutkan pembayaran; jangan membayar ulang.');e.code='ACTIVE_INVOICE';throw e;}}
@@ -105,7 +105,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
       const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='tripay'").get(req.body.merchant_ref);
       if(!p)return res.status(404).json({success:false,message:'Tagihan tidak ditemukan'});
       if(typeof req.body.reference!=='string' || (p.provider_ref && p.provider_ref!==req.body.reference))return res.status(403).json({success:false,message:'Referensi tidak sesuai'});
-      try {await refresh(p.order_id,undefined,req.body.reference);res.json({success:true});}
+      try {await refresh(p.order_id,undefined,req.body.reference);db.prepare('UPDATE topups SET verified_callback_ms=? WHERE order_id=?').run(Date.now(),p.order_id);res.json({success:true});}
       catch {res.status(502).json({success:false,message:'Konfirmasi TriPay belum tersedia; ulangi callback'});}
     });
   }

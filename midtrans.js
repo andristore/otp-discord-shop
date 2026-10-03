@@ -54,7 +54,7 @@ function createMidtrans({db,fetchImpl=fetch,env=process.env,onSettled,assertCanC
   });
   async function refresh(id,userId){const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='midtrans'").get(id);if(!p || (userId && p.discord_id!==userId))throw new Error('Tagihan tidak ditemukan.');
     if(p.production==null || Boolean(p.production)!==production)throw new Error('Mode tagihan Midtrans berbeda atau belum tercatat. Hubungi admin; jangan membayar ulang.');
-    const status=await request('/v2/'+encodeURIComponent(id)+'/status');validateMidtransStatus(p,status);const r=apply(status);if(r.credited && r.purpose==='purchase' && r.provider_status==='settlement' && status.transaction_status==='settlement')await onSettled(r);return {...r,providerStatus:status.transaction_status};
+    const status=await request('/v2/'+encodeURIComponent(id)+'/status');validateMidtransStatus(p,status);const r=apply(status);db.prepare('UPDATE topups SET status_checked_ms=? WHERE order_id=?').run(Date.now(),id);if(r.credited && r.purpose==='purchase' && r.provider_status==='settlement' && status.transaction_status==='settlement')await onSettled(r);return {...r,providerStatus:status.transaction_status};
   }
   const reserve=db.transaction((id,userId,amount,purpose)=>{assertCanCreate(userId);db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production) VALUES(?,?,?,?,'midtrans','qris',?)").run(id,userId,amount,purpose,production?1:0);});
   async function create(userId,amount,options={}){if(!configured)throw new Error('MIDTRANS_SERVER_KEY belum diisi oleh admin.');
@@ -67,9 +67,10 @@ function createMidtrans({db,fetchImpl=fetch,env=process.env,onSettled,assertCanC
     if(!configured)return res.status(503).json({success:false,message:'Midtrans belum aktif'});
     if(!validMidtransSignature(req.body,serverKey))return res.status(403).json({success:false,message:'Signature tidak valid'});
     const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='midtrans'").get(req.body.order_id);if(!p)return res.status(404).json({success:false,message:'Tagihan tidak ditemukan'});
-    try{validateMidtransStatus(p,req.body);await refresh(p.order_id);note('callback_ms',Date.now());note('callback_code','VERIFIED');res.json({success:true});}catch{note('callback_ms',Date.now());note('callback_code','RETRY_REQUIRED');diagnostics?.record('webhook','FAILED','midtrans');res.status(502).json({success:false,message:'Konfirmasi belum tersedia; ulangi notifikasi'});}
+    try{validateMidtransStatus(p,req.body);await refresh(p.order_id);db.prepare('UPDATE topups SET verified_callback_ms=? WHERE order_id=?').run(Date.now(),p.order_id);note('callback_ms',Date.now());note('callback_code','VERIFIED');res.json({success:true});}catch{note('callback_ms',Date.now());note('callback_code','RETRY_REQUIRED');diagnostics?.record('webhook','FAILED','midtrans');res.status(502).json({success:false,message:'Konfirmasi belum tersedia; ulangi notifikasi'});}
   });}
   async function inspect(id){const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='midtrans'").get(id);if(!p)throw new Error('Invoice Midtrans tidak ditemukan.');if(p.production==null||Boolean(p.production)!==production)throw new Error('Mode invoice berbeda dari konfigurasi Midtrans.');const s=await request('/v2/'+encodeURIComponent(id)+'/status');validateMidtransStatus(p,s);return {order_id:p.order_id,status:s.transaction_status,amount:p.amount,expires_ms:midtransExpiry(s.expiry_time)};}
   return {configured,production,create,refresh,mount,health,inspect};
 }
-module.exports={validMidtransSignature,validateMidtransStatus,createMidtrans,midtransExpiry};
+function refundReviewFilter(alias){if(!/^[a-z]+$/.test(alias))throw Error('Alias tidak valid.');return `NOT EXISTS(SELECT 1 FROM gateway_refund_reviews r WHERE r.order_id=${alias}.order_id AND r.state='resolved' AND r.observed_status IS ${alias}.provider_status AND r.observed_amount IS ${alias}.external_refund_amount AND r.observed_ref IS ${alias}.provider_ref)`;}
+module.exports={validMidtransSignature,validateMidtransStatus,createMidtrans,midtransExpiry,refundReviewFilter};

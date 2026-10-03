@@ -9,8 +9,9 @@ function buttonColor(button) {
   const label=String(button.label || '').trim().replace(/^🏠\s*/, '');
   const navigation=/^(Kembali|Batal|Menu Awal(?: Admin)?|Mulai Ulang|Back|Cancel|Home|Admin Home|Main Menu(?: Admin)?|Restart|Start Over|Atur Varian|Configure Variant)$/i.test(label);
   const action=id.split(':')[0];
-  const selection=/^(flow_pick:|provider_flow_pick:|pick_product:|provider_product:|product:|manual_detail:|admin_manual_detail:|admin_manual_stock_edit:|admin_manual_change:|admin_buyers_detail:|admin_premium_claim_detail:|history_detail:|manual_order:|admin_manual_order:|active_order:|favorite_detail:|admin_store_detail:|manual_request_detail:|admin_ops_issue:|admin_tools_ticket:|tool_ticket:|admin_tools_fee_detail:)/.test(id);
-  const destructive=button.style===4||/(^|_)(cancel|delete|remove|revoke|reject|rejected|refund)(_|$)/.test(action);
+  const selection=/^(flow_pick:|provider_flow_pick:|pick_product:|provider_product:|product:|manual_detail:|admin_manual_detail:|admin_manual_stock_edit:|admin_manual_change:|admin_buyers_detail:|admin_premium_claim_detail:|history_detail:|manual_order:|admin_manual_order:|active_order:|favorite_detail:|admin_store_detail:|manual_request_detail:|admin_ops_issue:|admin_tools_ticket:|tool_ticket:|admin_tools_fee_detail:|admin_healthcheck_refund_detail:)/.test(id);
+  const refundReview=/^admin_healthcheck_refund(?:s|_detail|_resolve|_save)$/.test(action);
+  const destructive=button.style===4||(!refundReview&&/(^|_)(cancel|delete|remove|revoke|reject|rejected|refund)(_|$)/.test(action));
   if(navigation&&!destructive)style=1;
   else if(destructive)style=4;
   else if(selection)style=2;
