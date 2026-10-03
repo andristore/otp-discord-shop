@@ -18,7 +18,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     product_name TEXT NOT NULL,description TEXT NOT NULL,amount INTEGER NOT NULL,
     expires_at INTEGER NOT NULL);
   `);
-  for(const [table,columns] of Object.entries({manual_products:{auto_enabled:'INTEGER NOT NULL DEFAULT 0',deleted:'INTEGER NOT NULL DEFAULT 0',quantity:'INTEGER',parent_id:'INTEGER'},manual_product_quotes:{auto_enabled:'INTEGER NOT NULL DEFAULT 0'},manual_product_orders:{automatic:'INTEGER NOT NULL DEFAULT 0',quantity_reserved:'INTEGER NOT NULL DEFAULT 0',payment_method:"TEXT NOT NULL DEFAULT 'balance'",invoice_id:'TEXT',notified:'INTEGER NOT NULL DEFAULT 0',polled_at:'INTEGER'}})) {
+  for(const [table,columns] of Object.entries({manual_products:{auto_enabled:'INTEGER NOT NULL DEFAULT 0',deleted:'INTEGER NOT NULL DEFAULT 0',quantity:'INTEGER',parent_id:'INTEGER',cost:'INTEGER'},manual_product_quotes:{auto_enabled:'INTEGER NOT NULL DEFAULT 0',cost_snapshot:'INTEGER'},manual_product_orders:{automatic:'INTEGER NOT NULL DEFAULT 0',quantity_reserved:'INTEGER NOT NULL DEFAULT 0',payment_method:"TEXT NOT NULL DEFAULT 'balance'",invoice_id:'TEXT',notified:'INTEGER NOT NULL DEFAULT 0',polled_at:'INTEGER',cost_snapshot:'INTEGER'}})) {
     const existing=new Set(db.prepare('PRAGMA table_info('+table+')').all().map(c=>c.name));
     for(const [name,type] of Object.entries(columns))if(!existing.has(name)){
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
@@ -40,11 +40,11 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
   function validate(p) {
     const name=String(p.name || '').trim(),description=String(p.description || '').trim(),raw=String(p.price).trim(),price=Number(raw);
     if(!name || name.length>80 || !description || description.length>800 || !/^\d+$/.test(raw) || !Number.isSafeInteger(price) || price<1 || price>1000000 || ![0,1].includes(p.enabled))throw Error('Nama 1–80 karakter, deskripsi 1–800 karakter, harga 1–1.000.000 rupiah tanpa titik, status 1 atau 0.');
-    const quantity=p.quantity==null?null:Number(p.quantity);if(quantity!==null && (!/^\d+$/.test(String(p.quantity)) || !Number.isSafeInteger(quantity) || quantity<0 || quantity>1000000))throw Error('Stok jual harus angka 0–1.000.000 tanpa titik.');return {name,description,price,enabled:p.enabled,quantity};
+    const quantity=p.quantity==null?null:Number(p.quantity);if(quantity!==null && (!/^\d+$/.test(String(p.quantity)) || !Number.isSafeInteger(quantity) || quantity<0 || quantity>1000000))throw Error('Stok jual harus angka 0–1.000.000 tanpa titik.');const cost=p.cost==null||String(p.cost).trim()===''?null:Number(p.cost);if(cost!==null&&(!/^\d+$/.test(String(p.cost).trim())||!Number.isSafeInteger(cost)||cost<0||cost>1000000))throw Error('Modal 0–1.000.000 IDR tanpa titik; kosongkan jika belum diketahui.');return {name,description,price,enabled:p.enabled,quantity,cost};
   }
   const save=db.transaction((user,id,fields)=>{admin(user);const p=validate(fields);
-    if(id){product(id);db.prepare('UPDATE manual_products SET name=?,description=?,price=?,enabled=?,quantity=? WHERE id=?').run(p.name,p.description,p.price,p.enabled,p.quantity,id);}
-    else id=Number(db.prepare('INSERT INTO manual_products(name,description,price,enabled,quantity) VALUES(?,?,?,?,?)').run(p.name,p.description,p.price,p.enabled,p.quantity).lastInsertRowid);
+    if(id){product(id);db.prepare('UPDATE manual_products SET name=?,description=?,price=?,enabled=?,quantity=?,cost=? WHERE id=?').run(p.name,p.description,p.price,p.enabled,p.quantity,p.cost,id);}
+    else id=Number(db.prepare('INSERT INTO manual_products(name,description,price,enabled,quantity,cost) VALUES(?,?,?,?,?,?)').run(p.name,p.description,p.price,p.enabled,p.quantity,p.cost).lastInsertRowid);
     audit(user,`Simpan produk manual #${id}: ${p.name} • ${p.price} IDR`);return product(id);
   });
   function stockCount(id){return db.prepare("SELECT COUNT(*) n FROM manual_product_stock WHERE product_id=? AND state='available'").get(id).n;}
@@ -60,14 +60,14 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
   const saveWithStock=db.transaction((user,id,fields,body,eventId)=>{admin(user);product(id);const p=validate(fields);body=String(body || '').trim();if(body.length>1000 || !eventId)throw Error('Data stok maksimal 1000 karakter.');
     const hash=createHash('sha256').update(JSON.stringify([p,body])).digest('hex'),previous=db.prepare('SELECT * FROM manual_product_edit_events WHERE id=?').get(eventId);
     if(previous){if(previous.admin_id!==user || previous.product_id!==Number(id) || previous.request_hash!==hash)throw Error('Pengubahan produk tidak sesuai.');return product(id);}
-    db.prepare('UPDATE manual_products SET name=?,description=?,price=?,enabled=?,quantity=? WHERE id=?').run(p.name,p.description,p.price,p.enabled,p.quantity,id);
+    db.prepare('UPDATE manual_products SET name=?,description=?,price=?,enabled=?,quantity=?,cost=? WHERE id=?').run(p.name,p.description,p.price,p.enabled,p.quantity,p.cost,id);
     if(body)db.prepare('INSERT INTO manual_product_stock(product_id,body) VALUES(?,?)').run(id,body);
     audit(user,'Ubah produk #'+id+(body?' dan tambah satu stok data':''));db.prepare('INSERT INTO manual_product_edit_events VALUES(?,?,?,?)').run(eventId,user,id,hash);return product(id);
   });
   const createWithStock=db.transaction((user,fields,body,eventId)=>{admin(user);const p=validate(fields);body=String(body || '').trim();if(body.length>1000 || !eventId)throw Error('Data kirim otomatis maksimal 1000 karakter.');
     const hash=createHash('sha256').update(JSON.stringify(['create',p,body])).digest('hex'),previous=db.prepare('SELECT * FROM manual_product_edit_events WHERE id=?').get(eventId);
     if(previous){if(previous.admin_id!==user || previous.request_hash!==hash)throw Error('Penambahan produk tidak sesuai.');return product(previous.product_id);}
-    const id=Number(db.prepare('INSERT INTO manual_products(name,description,price,enabled,auto_enabled,quantity) VALUES(?,?,?,?,?,?)').run(p.name,p.description,p.price,p.enabled,body?1:0,p.quantity).lastInsertRowid);
+    const id=Number(db.prepare('INSERT INTO manual_products(name,description,price,enabled,auto_enabled,quantity,cost) VALUES(?,?,?,?,?,?,?)').run(p.name,p.description,p.price,p.enabled,body?1:0,p.quantity,p.cost).lastInsertRowid);
     if(body)db.prepare('INSERT INTO manual_product_stock(product_id,body) VALUES(?,?)').run(id,body);
     audit(user,'Tambah produk #'+id+(body?' dengan satu stok dan kirim otomatis aktif':''));db.prepare('INSERT INTO manual_product_edit_events VALUES(?,?,?,?)').run(eventId,user,id,hash);return product(id);
   });
@@ -99,7 +99,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
   function quote(user,id){if(maintenance())throw Error('Toko sedang maintenance.');const p=product(id);if(!p.enabled||(p.parent_id&&!product(p.parent_id).enabled))throw Error('Produk sedang nonaktif.');
     const token=randomUUID();db.prepare('DELETE FROM manual_product_quotes WHERE expires_at<? AND id NOT IN (SELECT id FROM manual_product_orders)').run(Date.now());
     if(p.quantity===0)throw Error('Stok jual habis.');if(p.auto_enabled&&!stockCount(id))throw Error('Data kirim otomatis belum tersedia.');
-    db.prepare('INSERT INTO manual_product_quotes(id,discord_id,product_id,product_name,description,amount,expires_at,auto_enabled) VALUES(?,?,?,?,?,?,?,?)').run(token,user,p.id,p.name,p.description,p.price,Date.now()+15*60000,p.auto_enabled);return {...p,token};
+    db.prepare('INSERT INTO manual_product_quotes(id,discord_id,product_id,product_name,description,amount,expires_at,auto_enabled,cost_snapshot) VALUES(?,?,?,?,?,?,?,?,?)').run(token,user,p.id,p.name,p.description,p.price,Date.now()+15*60000,p.auto_enabled,p.cost);return {...p,token};
   }
   function checkout(user,token){if(maintenance())throw Error('Toko sedang maintenance.');const q=db.prepare('SELECT * FROM manual_product_quotes WHERE id=? AND discord_id=?').get(token,user);
     if(!q || q.expires_at<Date.now())throw Error('Konfirmasi kedaluwarsa. Pilih produk kembali.');const p=product(q.product_id);
@@ -110,7 +110,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     if(previous){if(previous.discord_id!==user)throw Error('Pesanan tidak ditemukan.');if(previous.payment_method!=='balance')throw Error('Pesanan memakai QRIS. Buka Pesanan Manual untuk melanjutkan tagihan.');return previous;}
     const q=checkout(user,token);
     if(!db.prepare('UPDATE users SET balance=balance-? WHERE discord_id=? AND balance>=?').run(q.amount,user,q.amount).changes)throw Error('Saldo tidak cukup. Isi saldo dahulu.');
-    db.prepare('INSERT INTO manual_product_orders(id,discord_id,product_id,product_name,description,amount,automatic) VALUES(?,?,?,?,?,?,?)').run(token,user,q.product_id,q.product_name,q.description,q.amount,q.auto_enabled);
+    db.prepare('INSERT INTO manual_product_orders(id,discord_id,product_id,product_name,description,amount,automatic,cost_snapshot) VALUES(?,?,?,?,?,?,?,?)').run(token,user,q.product_id,q.product_name,q.description,q.amount,q.auto_enabled,q.cost_snapshot);
     const o=getOrder(user,token);reserveStock(o);deliverStock(o);
     return getOrder(user,token);
   });
@@ -124,7 +124,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
   const reserveInvoice=db.transaction((user,token)=>{const previous=db.prepare('SELECT * FROM manual_product_orders WHERE id=?').get(token);
     if(previous){if(previous.discord_id!==user || previous.payment_method!=='qris')throw Error('Pesanan sudah memakai metode pembayaran lain.');return {order:previous,created:false};}
     payments.assertCanCreate?.(user);const q=checkout(user,token);if(q.amount<1000)throw Error('QRIS minimal 1.000 IDR. Gunakan saldo untuk harga lebih kecil.');const invoice='manual-buy-'+randomUUID();
-    db.prepare("INSERT INTO manual_product_orders(id,discord_id,product_id,product_name,description,amount,automatic,payment_method,invoice_id,state) VALUES(?,?,?,?,?,?,?,'qris',?,'awaiting_payment')").run(token,user,q.product_id,q.product_name,q.description,q.amount,q.auto_enabled,invoice);
+    db.prepare("INSERT INTO manual_product_orders(id,discord_id,product_id,product_name,description,amount,automatic,payment_method,invoice_id,state,cost_snapshot) VALUES(?,?,?,?,?,?,?,'qris',?,'awaiting_payment',?)").run(token,user,q.product_id,q.product_name,q.description,q.amount,q.auto_enabled,invoice,q.cost_snapshot);
     const o=getOrder(user,token);reserveStock(o);return {order:o,created:true};
   });
   async function createQR(user,token,customer){if(!payments?.configured)throw Error('QRIS belum aktif.');require('./payments').parseCustomerEmail(customer.email);
@@ -173,7 +173,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
   function detail(p,admin,user) {
     const extras=premium?`\n${p.duration_days?t(user,'Masa aktif: ','Validity: ')+p.duration_days+t(user,' hari setelah pesanan selesai.\n',' days after order completion.\n'):''}${p.warranty_days?t(user,'Garansi: ','Warranty: ')+p.warranty_days+t(user,' hari setelah pesanan selesai.\n',' days after order completion.\n'):''}`:'';
     const components=[admin?row(button('admin_manual_edit:'+p.id,'Ubah Produk',1),button('admin_manual_delivery_data:'+p.id+':0','Data & Stok',1),button('admin_manual_settings:'+p.id,'Pengaturan',1)):row(button('manual_quote:'+p.id,'Beli Produk',3))];
-    if(premium&&!admin){const actions=[];if(premium.variants('',p.id).count)actions.push(button('premium_variants:'+(p.parent_id||p.id)+':0','Pilih Varian',2));if(!premium.available(p.id))actions.push(button('premium_watch:'+p.id,'Notifikasi Stok',1));if(actions.length)components.push(row(...actions));}
+    if(premium&&!admin){const actions=[];if(!p.parent_id&&premium.variants('',p.id).count)actions.push(button('premium_variants:'+p.id+':0','Pilih Varian',2));if(!premium.available(p.id))actions.push(button('premium_watch:'+p.id,'Notifikasi Stok',1));if(actions.length)components.push(row(...actions));}
     components.push(row(button(p.parent_id?(admin?'admin_premium_variants:':'premium_variants:')+p.parent_id+':0':admin?'admin_manual_catalog:0':'manual_catalog:0','Kembali',1),home(admin)));
     return {content:'',embeds:[embed('📦 '+p.name,`${safe(p.description)}\n\n${t(user,'Harga jual: **','Selling price: **')}${money(p.price)}**\n${t(user,'Status pengiriman: ','Delivery: ')}${p.auto_enabled?t(user,'Otomatis','Automatic'):t(user,'Diproses admin','Processed by admin')}\n${p.auto_enabled||admin?t(user,'Stok jual: ','Sale stock: ')+model.sellStock(p)+'\n':''}${admin?`${t(user,'Status: ','Status: ')}${p.enabled?t(user,'Aktif','Active'):t(user,'Nonaktif','Inactive')}`:t(user,'Data dikirim setelah pembayaran terverifikasi.','Data is delivered after payment verification.')}${extras}`)],components};
   }
@@ -184,7 +184,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
     return {content:`**Pesanan Produk Manual**\n${data.count?'Pilih pesanan untuk melihat detail.':'Belum ada pesanan.'}\nHalaman ${data.page+1}/${data.pages} • ${data.count} pesanan`,embeds:[],components};
   }
   function editView(p,user){
-    return {content:'',embeds:[embed('Ubah Produk • '+p.name,`Deskripsi:\n${safe(p.description)}\n\nHarga jual: ${money(p.price)}`)],components:[row(button('admin_manual_data:'+p.id,'Nama & Deskripsi',1),button('admin_manual_price:'+p.id,'Harga Jual',3)),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
+    return {content:'',embeds:[embed('Ubah Produk • '+p.name,`Deskripsi:\n${safe(p.description)}\n\nHarga jual: ${money(p.price)}\nModal per unit: ${p.cost===null?'Belum diisi':money(p.cost)}`)],components:[row(button('admin_manual_data:'+p.id,'Nama & Deskripsi',1),button('admin_manual_price:'+p.id,'Harga & Modal',3)),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
   }
   function settingsView(p){
     return {content:'',embeds:[embed('Pengaturan • '+p.name,`Produk: **${p.enabled?'Aktif':'Nonaktif'}**\nPengiriman: **${p.auto_enabled?'Otomatis':'Diproses admin'}**\n\nAtur status, pengiriman, dan tes produk di sini.`)],components:[row(button('admin_manual_toggle:'+p.id,p.enabled?'Nonaktifkan Produk':'Aktifkan Produk',p.enabled?4:3),button('admin_manual_auto:'+p.id,p.auto_enabled?'Matikan Kirim Otomatis':'Aktifkan Kirim Otomatis',1)),row(...(premium?[button('admin_premium_menu:'+p.id,p.parent_id?'Panduan & Garansi':'Varian, Panduan & Garansi',1)]:[]),button('admin_manual_test:'+p.id,'Tes Beli',1)),row(button('admin_manual_delete_confirm:'+p.id,'Hapus Produk',4)),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
@@ -216,7 +216,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
           let body='';try{body=value('stock');}catch{}
           let quantity;try{quantity=value('quantity');}catch{}const p=model.createWithStock(user,{name:value('name'),description:value('description'),price:value('price'),enabled:1,quantity},body,i.id);await i.reply({ephemeral:true,...detail(p,true,user)});
         }else if(key==='admin_manual_data_save' || key==='admin_manual_price_save') {
-          const old=model.product(arg);let p;if(key==='admin_manual_data_save'){let body='',quantity=old.quantity;try{body=value('stock');}catch{}try{const raw=value('quantity');if(raw!==undefined)quantity=raw;}catch{}p=model.saveWithStock(user,arg,{...old,name:value('name'),description:value('description'),quantity},body,i.id);}else p=model.save(user,arg,{...old,price:value('price')});await i.reply({ephemeral:true,...editView(p,user)});
+          const old=model.product(arg);let p;if(key==='admin_manual_data_save'){let body='',quantity=old.quantity;try{body=value('stock');}catch{}try{const raw=value('quantity');if(raw!==undefined)quantity=raw;}catch{}p=model.saveWithStock(user,arg,{...old,name:value('name'),description:value('description'),quantity},body,i.id);}else {let cost=old.cost;try{cost=value('cost');}catch{}p=model.save(user,arg,{...old,price:value('price'),cost});}await i.reply({ephemeral:true,...editView(p,user)});
         }else if(key==='admin_manual_quantity_save') {
           const p=model.product(arg);model.save(user,arg,{...p,quantity:value('quantity')});await i.reply({ephemeral:true,...deliveryDataView(user,arg)});
         }else if(key==='admin_manual_stock_save') {
@@ -240,7 +240,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
       else if(key==='admin_manual_delete'){model.remove(user,arg);await i.update(catalog(user,0,true));}
       else if(key==='admin_manual_settings')await i.update(settingsView(model.product(arg)));
       else if(key==='admin_manual_edit')await i.update(editView(model.product(arg),user,Number(parts[2] || 0)));
-      else if(key==='admin_manual_data' || key==='admin_manual_price'){const p=model.product(arg);await i.showModal(key==='admin_manual_data'?modal('admin_manual_data_save:'+p.id,'Ubah Produk',[['name','Nama produk',p.name,80],['description','Deskripsi & waktu proses',p.description,800,true]]):modal('admin_manual_price_save:'+p.id,'Atur Harga Jual',[['price','Harga jual IDR, tanpa titik',p.price,7]]));}
+      else if(key==='admin_manual_data' || key==='admin_manual_price'){const p=model.product(arg);await i.showModal(key==='admin_manual_data'?modal('admin_manual_data_save:'+p.id,'Ubah Produk',[['name','Nama produk',p.name,80],['description','Deskripsi & waktu proses',p.description,800,true]]):modal('admin_manual_price_save:'+p.id,'Harga & Modal',[['price','Harga jual IDR, tanpa titik',p.price,7],['cost','Modal/unit IDR (kosong = belum tahu)',p.cost??'',7,false,false]]));}
       else if(key==='admin_manual_quantity'){const p=model.product(arg);await i.showModal(modal('admin_manual_quantity_save:'+p.id,'Atur Stok Jual',[['quantity','Jumlah stok jual tersedia (angka)',p.quantity??(p.auto_enabled?model.stockCount(p.id):0),7]]));}
       else if(key==='admin_manual_delivery_data')await i.update(deliveryDataView(user,arg,Number(parts[2] || 0)));
       else if(key==='admin_manual_stock')await i.reply({ephemeral:true,...deliveryDataView(user,arg,Number(parts[2] || 0))});

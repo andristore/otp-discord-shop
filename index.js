@@ -13,6 +13,7 @@ const {
 
 const {createBuyerProfiles,configureBuyerProfiles,rememberBuyer}=require("./buyer-profiles");
 const {createLanguages}=require("./languages");
+const {createShopHealth,createHealthHandler}=require("./shop-health");
 const {createShopImprovements,createImprovementsHandler}=require("./shop-improvements");
 const {createPremiumProducts,createPremiumProductsHandler}=require("./premium-products");
 const {createManualProducts,createManualProductsHandler}=require("./manual-products");
@@ -324,7 +325,9 @@ async function startDiscord(){
   }
 
   const efficiency=createEfficiency({db,staff});
-  const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
+  const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
+  const shopHealth=createShopHealth({db,staff,payments,products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
+  const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
   const buyerManagement=createBuyerManagement({db,staff});
   const handleBuyerManagement=createBuyerManagementHandler({discord:require("discord.js"),model:buyerManagement,staff});
   const buyerArchivePoll=setInterval(()=>{try{buyerManagement.sweep();}catch(e){console.error(e);}},3600000);buyerArchivePoll.unref();buyerManagement.sweep();
@@ -362,6 +365,7 @@ async function startDiscord(){
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
+      if(await handleHealth(i))return;
       if(await handleImprovements(i))return;
       if(await handleStoreFeatures(i))return;
       if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:|tool_coupon)/.test(String(i.customId || ''))){
@@ -536,6 +540,7 @@ async function startDiscord(){
   const backupPoll=setInterval(()=>toolkit.backup().catch(console.error),3600000);backupPoll.unref();toolkit.backup().catch(console.error);
   const manualPoll=setInterval(()=>storeFeatures.poll().catch(console.error),30000);manualPoll.unref();storeFeatures.poll().catch(console.error);
   const premiumPoll=setInterval(()=>premiumProducts.poll().catch(console.error),60000);premiumPoll.unref();premiumProducts.poll().catch(console.error);
+  const overduePoll=setInterval(()=>shopHealth.poll().catch(console.error),60000);overduePoll.unref();shopHealth.poll().catch(console.error);
   const manualProductPoll=setInterval(()=>manualProducts.poll().catch(console.error),30000);manualProductPoll.unref();manualProducts.poll().catch(console.error);
 }
 startDiscord();
