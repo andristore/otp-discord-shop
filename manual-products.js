@@ -163,12 +163,13 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{}}) {
     return {content:`**Pesanan Produk Manual**\n${data.count?'Pilih pesanan untuk melihat detail.':'Belum ada pesanan.'}\nHalaman ${data.page+1}/${data.pages} • ${data.count} pesanan`,embeds:[],components};
   }
   function editView(p,user){
-    return {content:'',embeds:[embed('Ubah Produk • '+p.name,`Stok jual: **${model.sellStock(p)}**\nData produk tersedia: **${model.stockCount(p.id)}**\n\nDeskripsi:\n${safe(p.description)}\n\nHarga jual: ${money(p.price)}`)],components:[row(button('admin_manual_data:'+p.id,'Ubah Produk & Stok Jual',1),button('admin_manual_delivery_data:'+p.id+':0','Data Produk',1),button('admin_manual_delete_confirm:'+p.id,'Hapus Produk',4)),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
+    return {content:'',embeds:[embed('Ubah Produk • '+p.name,`Stok jual: **${model.sellStock(p)}**\nData produk tersedia: **${model.stockCount(p.id)}**\n\nDeskripsi:\n${safe(p.description)}\n\nHarga jual: ${money(p.price)}`)],components:[row(button('admin_manual_data:'+p.id,'Ubah Produk',1),button('admin_manual_delivery_data:'+p.id+':0','Data Produk',1),button('admin_manual_delete_confirm:'+p.id,'Hapus Produk',4)),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
   }
   function deliveryDataView(user,id,page=0){
     const p=model.product(id),data=model.stocks(user,id,page,true),components=[];
     for(let n=0;n<data.rows.length;n+=5)components.push(row(...data.rows.slice(n,n+5).map(s=>button('admin_manual_stock_edit:'+s.id,`Data Produk #${s.id}`,1))));
-    components.push(row(button('admin_manual_delivery_data:'+id+':'+(data.page-1),'Sebelumnya',1).setDisabled(data.page===0),button('admin_manual_delivery_data:'+id+':'+(data.page+1),'Berikutnya',1).setDisabled(data.page===data.pages-1),button('admin_manual_stock_add:'+id,'Tambah Data Produk',3),button('admin_manual_edit:'+id,'Kembali',1),home(true)));
+    components.push(row(button('admin_manual_delivery_data:'+id+':'+(data.page-1),'Sebelumnya',1).setDisabled(data.page===0),button('admin_manual_delivery_data:'+id+':'+(data.page+1),'Berikutnya',1).setDisabled(data.page===data.pages-1),button('admin_manual_edit:'+id,'Kembali',1),home(true)));
+    components.push(row(button('admin_manual_stock_add:'+id,'Tambah Data Produk',3),button('admin_manual_quantity:'+id,'Atur Stok Jual',1)));
     return {content:'',embeds:[embed('Data Produk • '+p.name,`Stok jual: **${model.sellStock(p)}**\nData siap kirim: **${data.count}**\n\n${data.count?'Pilih data untuk mengubah akun atau kode.':'Belum ada data siap kirim. Tekan Tambah Data Produk.'}\nSatu data unik untuk satu pembeli.\nHalaman ${data.page+1}/${data.pages}`)],components};
   }
   function modal(id,title,fields){return new ModalBuilder().setCustomId(id).setTitle(title).addComponents(...fields.map(([key,label,value,max,long,required=true])=>{const input=new TextInputBuilder().setCustomId(key).setLabel(label).setStyle(long?TextInputStyle.Paragraph:TextInputStyle.Short).setRequired(required).setMaxLength(max);if(String(value))input.setValue(String(value));return row(input);}));}
@@ -189,6 +190,8 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{}}) {
           let quantity;try{quantity=value('quantity');}catch{}const p=model.createWithStock(user,{name:value('name'),description:value('description'),price:value('price'),enabled:1,quantity},body,i.id);await i.reply({ephemeral:true,...detail(p,true)});
         }else if(key==='admin_manual_data_save' || key==='admin_manual_price_save') {
           const old=model.product(arg);let p;if(key==='admin_manual_data_save'){let body='',quantity=old.quantity;try{body=value('stock');}catch{}try{const raw=value('quantity');if(raw!==undefined)quantity=raw;}catch{}p=model.saveWithStock(user,arg,{...old,name:value('name'),description:value('description'),quantity},body,i.id);}else p=model.save(user,arg,{...old,price:value('price')});await i.reply({ephemeral:true,...(key==='admin_manual_data_save'?editView(p,user):detail(p,true))});
+        }else if(key==='admin_manual_quantity_save') {
+          const p=model.product(arg);model.save(user,arg,{...p,quantity:value('quantity')});await i.reply({ephemeral:true,...deliveryDataView(user,arg)});
         }else if(key==='admin_manual_stock_save') {
           const stockId=parts[2];model.saveStock(user,arg,stockId || null,value('body'));await i.reply({ephemeral:true,...deliveryDataView(user,arg)});
         }else if(key==='manual_qris_email') {
@@ -207,7 +210,8 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{}}) {
       else if(key==='admin_manual_delete_confirm'){const p=model.product(arg);await i.reply({ephemeral:true,content:`Hapus produk **${safe(p.name)}** dari katalog?\nRiwayat pesanan tetap tersimpan. Tagihan QRIS yang sudah dibuat tetap diproses sesuai pesanan.`,allowedMentions:{parse:[]},components:[row(button('admin_manual_delete:'+p.id,'Ya, Hapus Produk',4),button('admin_manual_edit:'+p.id,'Batal',1),home(true))]});}
       else if(key==='admin_manual_delete'){model.remove(user,arg);await i.update(catalog(user,0,true));}
       else if(key==='admin_manual_edit')await i.update(editView(model.product(arg),user,Number(parts[2] || 0)));
-      else if(key==='admin_manual_data' || key==='admin_manual_price'){const p=model.product(arg);await i.showModal(key==='admin_manual_data'?modal('admin_manual_data_save:'+p.id,'Ubah Produk',[['name','Nama produk',p.name,80],['quantity','Jumlah stok jual tersedia (angka)',p.quantity??(p.auto_enabled?model.stockCount(p.id):0),7],['description','Deskripsi & waktu proses',p.description,800,true]]):modal('admin_manual_price_save:'+p.id,'Atur Harga Jual',[['price','Harga jual IDR, tanpa titik',p.price,7]]));}
+      else if(key==='admin_manual_data' || key==='admin_manual_price'){const p=model.product(arg);await i.showModal(key==='admin_manual_data'?modal('admin_manual_data_save:'+p.id,'Ubah Produk',[['name','Nama produk',p.name,80],['description','Deskripsi & waktu proses',p.description,800,true]]):modal('admin_manual_price_save:'+p.id,'Atur Harga Jual',[['price','Harga jual IDR, tanpa titik',p.price,7]]));}
+      else if(key==='admin_manual_quantity'){const p=model.product(arg);await i.showModal(modal('admin_manual_quantity_save:'+p.id,'Atur Stok Jual',[['quantity','Jumlah stok jual tersedia (angka)',p.quantity??(p.auto_enabled?model.stockCount(p.id):0),7]]));}
       else if(key==='admin_manual_delivery_data')await i.update(deliveryDataView(user,arg,Number(parts[2] || 0)));
       else if(key==='admin_manual_stock')await i.reply({ephemeral:true,...deliveryDataView(user,arg,Number(parts[2] || 0))});
       else if(key==='admin_manual_stock_add')await i.showModal(modal('admin_manual_stock_save:'+arg,'Tambah Data Produk',[['body','Akun/kode unik untuk satu pembeli','',1000,true]]));

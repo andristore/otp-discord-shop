@@ -44,7 +44,11 @@ function createServerAccess({db,sendDM,env=process.env,staff}) {
     return {page,pages,count,rows:db.prepare("SELECT * FROM discord_server_access ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,created_at DESC,guild_id ASC LIMIT 5 OFFSET ?").all(page*5)};
   }
   async function gate(i) {
-    if(!i.guildId)return false;
+    if(!i.guildId){
+      if(isAdmin(i.user.id))return false;
+      await i.reply({ephemeral:true,content:'🔒 Menu bot melalui DM hanya untuk admin toko. Untuk belanja, cek saldo, isi saldo, atau melihat pesanan, buka /shop di server Discord yang sudah disetujui. Data pesanan tetap dikirim ke DM Anda.'});
+      return true;
+    }
     const id=String(i.customId || '');
     const adminMenu=(i.isChatInputCommand() && i.commandName==='admin') || id.startsWith('admin_') || id.startsWith('provider_');
     if(adminMenu && isAdmin(i.user.id))return false;
