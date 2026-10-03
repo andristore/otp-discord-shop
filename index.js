@@ -295,7 +295,19 @@ async function startDiscord(){
     new SlashCommandBuilder().setName("ping").setDescription("Cek respons dan koneksi bot (admin)")
   ].map(x=>x.toJSON());
   const rest=new REST({version:"10"}).setToken(process.env.DISCORD_TOKEN);
-  if(process.env.DISCORD_CLIENT_ID) await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),{body:commands});
+  // Resolve the application from the authenticated bot instead of silently
+  // skipping registration when DISCORD_CLIENT_ID is missing or stale.
+  try{
+    const application=await rest.get('/oauth2/applications/@me');
+    if(!/^\d{17,20}$/.test(String(application?.id||'')))throw Error('Application ID tidak valid');
+    if(process.env.DISCORD_CLIENT_ID&&process.env.DISCORD_CLIENT_ID.trim()!==application.id)console.warn('DISCORD_CLIENT_ID tidak sesuai token; memakai Application ID bot yang terautentikasi.');
+    const registered=await rest.put(Routes.applicationCommands(application.id),{body:commands});
+    if(!Array.isArray(registered)||!commands.every(c=>registered.some(r=>r.name===c.name)))throw Error('Discord belum mengonfirmasi semua command');
+    console.log('Command Discord berhasil didaftarkan: /shop, /admin, /ping');
+  }catch(e){
+    console.error('Pendaftaran command Discord gagal. Kode:',e.code||e.status||'tidak diketahui','Periksa token, koneksi dan izin aplikasi Discord.');
+    throw Error('Bot belum dapat mendaftarkan /shop, /admin dan /ping. Lihat log pendaftaran command.');
+  }
   function money(n){ return `${Number(n||0).toLocaleString("id-ID")} IDR`; }
 
   async function getBalance(id){
