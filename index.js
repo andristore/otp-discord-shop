@@ -21,6 +21,7 @@ const {createPricing}=require("./pricing");
 const {createCommerce}=require("./commerce");
 const {createDirectPayments,createDirectHandler}=require("./direct-payments");
 const {createOperations,createOperationsHandler}=require("./operations");
+const {createSMSCodeWebhook}=require("./smscode-webhook");
 const {createServerAccess,createServerAccessHandler}=require("./server-access");
 const {createStaff,createStaffHandler}=require("./staff");
 const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
@@ -272,6 +273,9 @@ manualProducts=createManualProducts({db,staff,payments,maintenance:()=>storeFeat
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
   sendDM:sendDiscordDM,staff});
+const smsWebhook=createSMSCodeWebhook({db,operations});smsWebhook.mount(app);
+const smsWebhookPoll=setInterval(()=>smsWebhook.drain().catch(console.error),15000);smsWebhookPoll.unref();
+smsWebhook.drain().catch(console.error);
 client.on('guildCreate',guild=>serverAccess.register(guild).catch(console.error));
 client.on('guildDelete',guild=>{if(!guild.unavailable)serverAccess.removed(guild.id);});
 client.once('clientReady',async()=>{for(const guild of client.guilds.cache.values())try{await serverAccess.register(guild);}catch(e){console.error(e);}});

@@ -5,6 +5,7 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
     CREATE TABLE IF NOT EXISTS admin_settings_audit(id INTEGER PRIMARY KEY,admin_id TEXT NOT NULL,setting TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
   const columns=db.prepare('PRAGMA table_info(orders)').all().map(c=>c.name);
   for(const name of ['otp_notified','otp_polled_at'])if(!columns.includes(name))db.exec(`ALTER TABLE orders ADD COLUMN ${name} TEXT`);
+  for(const name of ['otp_message','sms_revision'])if(!columns.includes(name))db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${name==='sms_revision'?'INTEGER':'TEXT'}`);
   // A restart during reconciliation returns to review without repeating financial actions.
   db.prepare("UPDATE direct_purchases SET state='review',error='Resolusi terputus saat restart. Periksa catatan dan order provider sebelum melanjutkan.' WHERE state='resolving'").run();
   const read=(key,fallback)=>db.prepare('SELECT value FROM shop_operations_settings WHERE key=?').get(key)?.value ?? fallback;
@@ -27,25 +28,31 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
     return {account,orders:db.prepare('SELECT * FROM orders WHERE discord_id=? ORDER BY id DESC LIMIT 3').all(id),topups:db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 3").all(id)};
   }
   let otpBusy=false,lowBusy=false,lastLow=-Infinity;
-  async function pollOTP() {
-    if(otpBusy || !sendDM)return;otpBusy=true;
+  async function pollOTP(providerOrderId=null) {
+    if(otpBusy || !sendDM)return false;otpBusy=true;let success=true;
     try {
-      const rows=db.prepare("SELECT * FROM orders WHERE provider_order_id IS NOT NULL AND refunded=0 AND (status IN ('ACTIVE','OTP_RECEIVED','pending') OR (otp IS NOT NULL AND COALESCE(otp_notified,'')<>otp)) ORDER BY COALESCE(otp_polled_at,'') ASC,id ASC LIMIT 10").all();
+      const rows=providerOrderId!==null?db.prepare("SELECT * FROM orders WHERE provider_order_id=? AND refunded=0").all(String(providerOrderId)):db.prepare("SELECT * FROM orders WHERE provider_order_id IS NOT NULL AND refunded=0 AND (status IN ('ACTIVE','OTP_RECEIVED','pending') OR (otp IS NOT NULL AND COALESCE(otp_notified,'')<>otp) OR (otp IS NULL AND otp_message IS NOT NULL AND COALESCE(otp_notified,'')<>('message:'||otp_message))) ORDER BY COALESCE(otp_polled_at,'') ASC,id ASC LIMIT 10").all();
+      if(providerOrderId!==null&&!rows.length)return Boolean(db.prepare("SELECT id FROM orders WHERE provider_order_id=? AND refunded=1").get(String(providerOrderId)));
       for(const row of rows) {
         db.prepare('UPDATE orders SET otp_polled_at=? WHERE id=?').run(new Date(now()).toISOString(),row.id);
         try {
-          if(['ACTIVE','OTP_RECEIVED','pending'].includes(row.status)) {
+          if(providerOrderId!==null||['ACTIVE','OTP_RECEIVED','pending'].includes(row.status)) {
             const d=(await smsOrder(row.provider_order_id)).data;
-            if(!d || String(d.id)!==String(row.provider_order_id))continue;
-            db.prepare('UPDATE orders SET otp=COALESCE(?,otp),status=?,phone=COALESCE(?,phone) WHERE id=? AND refunded=0').run(d.otp_code || null,d.status || row.status,d.phone_number || null,row.id);
+            if(!d || String(d.id)!==String(row.provider_order_id)){success=false;continue;}
+            const revision=Number.isSafeInteger(d.sms_revision)?d.sms_revision:null;
+            if(revision!==null&&row.sms_revision!==null&&revision<row.sms_revision){success=false;continue;}
+            const hasSMS=Boolean(d.otp_code||d.otp_message);
+            db.prepare('UPDATE orders SET otp=CASE WHEN ? THEN ? ELSE otp END,otp_message=CASE WHEN ? THEN ? ELSE otp_message END,sms_revision=COALESCE(?,sms_revision),status=?,phone=COALESCE(?,phone) WHERE id=? AND refunded=0').run(hasSMS?1:0,d.otp_code || null,hasSMS?1:0,d.otp_message || null,revision,d.status || row.status,d.phone_number || null,row.id);
           }
           const latest=db.prepare('SELECT * FROM orders WHERE id=?').get(row.id);
-          if(!latest.refunded && latest.otp && latest.otp_notified!==latest.otp) {
-            await sendDM(latest.discord_id,`🔢 Hi, Belanja Produk Digital Yukk — OTP masuk\nOrder: ${latest.provider_order_id}\nNomor: ${latest.phone || '-'}\nOTP: ${latest.otp}\nGunakan kode pada layanan yang Anda beli.`);
-            db.prepare('UPDATE orders SET otp_notified=? WHERE id=?').run(latest.otp,latest.id);
+          const token=latest.otp || (latest.otp_message?'message:'+latest.otp_message:null);
+          if(!latest.refunded && token && latest.otp_notified!==token) {
+            await sendDM(latest.discord_id,`🔢 Hi, Belanja Produk Digital Yukk — OTP masuk\nOrder: ${latest.provider_order_id}\nNomor: ${latest.phone || '-'}\n${latest.otp?'OTP: '+latest.otp:'SMS: '+latest.otp_message}\nGunakan kode pada layanan yang Anda beli.`);
+            db.prepare('UPDATE orders SET otp_notified=? WHERE id=?').run(token,latest.id);
           }
-        }catch { /* Keep unsent OTP for a later DM retry and the buyer's Cek OTP button. */ }
+        }catch { success=false;/* Keep unsent OTP for a later DM retry and the buyer's Cek OTP button. */ }
       }
+      return success;
     }finally{otpBusy=false;}
   }
   async function pollLow(force=false) {

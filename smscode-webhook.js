@@ -1,0 +1,58 @@
+const {createHmac,createHash,timingSafeEqual}=require('node:crypto');
+function verifySignature(raw,signature,secret){
+  if(!secret||!Buffer.isBuffer(raw)||typeof signature!=='string'||!/^sha256=[a-fA-F0-9]{64}$/.test(signature))return false;
+  return timingSafeEqual(createHmac('sha256',secret).update(raw).digest(),Buffer.from(signature.slice(7),'hex'));
+}
+function createSMSCodeWebhook({db,operations,env=process.env,now=()=>Date.now()}){
+  db.exec(`CREATE TABLE IF NOT EXISTS smscode_webhook_jobs(order_id TEXT PRIMARY KEY,received_at INTEGER NOT NULL,next_attempt INTEGER NOT NULL DEFAULT 0,generation INTEGER NOT NULL DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS smscode_webhook_receipts(hash TEXT PRIMARY KEY,received_at INTEGER NOT NULL);`);
+  let busy=false;
+  async function drain(){
+    if(busy)return;busy=true;
+    try{
+      db.prepare('DELETE FROM smscode_webhook_receipts WHERE received_at<?').run(now()-172800000);
+      db.prepare('DELETE FROM smscode_webhook_jobs WHERE received_at<?').run(now()-172800000);
+      const jobs=db.prepare('SELECT * FROM smscode_webhook_jobs WHERE next_attempt<=? ORDER BY received_at LIMIT 10').all(now());
+      for(const job of jobs){
+        db.prepare('UPDATE smscode_webhook_jobs SET next_attempt=? WHERE order_id=?').run(now()+15000,job.order_id);
+        try{if(await operations.pollOTP(job.order_id))db.prepare('DELETE FROM smscode_webhook_jobs WHERE order_id=? AND generation=?').run(job.order_id,job.generation);}catch{}
+      }
+    }finally{busy=false;}
+  }
+  function receive(req,res){
+    if(!env.SMSCODE_WEBHOOK_SECRET)return res.status(503).json({error:'Webhook belum dikonfigurasi.'});
+    if(!verifySignature(req.rawBody,req.get('X-Webhook-Signature'),env.SMSCODE_WEBHOOK_SECRET))return res.status(401).json({error:'Signature tidak valid.'});
+    let event;try{event=JSON.parse(req.rawBody.toString('utf8'));}catch{return res.status(400).json({error:'JSON tidak valid.'});}
+    if(!['order.otp_received','order.completed','order.expired','order.canceled'].includes(event?.event))return res.json({received:true,ignored:true});
+    const id=event.data?.order_id;
+    if((typeof id!=='string'&&(!Number.isSafeInteger(id)||id<=0))||!/^\d{1,20}$/.test(String(id)))return res.status(400).json({error:'Order ID tidak valid.'});
+    const hash=createHash('sha256').update(req.rawBody).digest('hex');
+    try{
+      db.transaction(()=>{
+        const added=db.prepare('INSERT OR IGNORE INTO smscode_webhook_receipts(hash,received_at) VALUES(?,?)').run(hash,now());
+        if(added.changes)db.prepare('INSERT INTO smscode_webhook_jobs(order_id,received_at,next_attempt) VALUES(?,?,0) ON CONFLICT(order_id) DO UPDATE SET received_at=excluded.received_at,next_attempt=0,generation=generation+1').run(String(id),now());
+      })();
+    }catch{return res.status(503).json({error:'Webhook belum dapat disimpan.'});}
+    res.json({received:true});
+    // Acknowledge before API reads or Discord delivery: provider timeout is 3 seconds.
+    void drain().catch(()=>{});
+  }
+  return {receive,drain,mount:app=>app.post('/webhooks/smscode',receive)};
+}
+async function configureSMSCodeWebhook({env=process.env,fetchImpl=fetch}={}){
+  const url=env.SMSCODE_WEBHOOK_URL,secret=env.SMSCODE_WEBHOOK_SECRET,token=env.SMSCODE_API_TOKEN;
+  if(!url||!secret||!token)throw Error('Isi SMSCODE_WEBHOOK_URL, SMSCODE_WEBHOOK_SECRET, dan SMSCODE_API_TOKEN di Railway.');
+  const parsed=new URL(url);if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.pathname!=='/webhooks/smscode'||parsed.search||parsed.hash)throw Error('URL harus HTTPS dan berakhir /webhooks/smscode.');
+  const base=(env.SMSCODE_API_BASE_URL||'https://api.smscode.gg/v1').replace(/\/$/,'');
+  const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
+  const configured=await fetchImpl(base+'/webhook',{method:'PATCH',headers,body:JSON.stringify({webhook_url:url,webhook_secret:secret}),signal:AbortSignal.timeout(15000)});
+  const config=await configured.json();if(!configured.ok||config.success!==true)throw Error('SMSCode menolak konfigurasi webhook. Periksa API token dan URL.');
+  const tested=await fetchImpl(base+'/webhook/test',{method:'POST',headers,signal:AbortSignal.timeout(15000)});
+  const result=await tested.json();if(!tested.ok||result.success!==true||Number(result.data?.status_code)!==200)throw Error('Konfigurasi tersimpan, tetapi tes webhook belum mendapat HTTP 200. Periksa domain, deployment, dan secret Railway.');
+  return {status:200};
+}
+if(require.main===module){
+  require('dotenv').config();
+  configureSMSCodeWebhook().then(()=>console.log('Webhook SMSCode tersimpan dan tes HTTP 200 berhasil.')).catch(e=>{console.error(e.message);process.exitCode=1;});
+}
+module.exports={createSMSCodeWebhook,verifySignature,configureSMSCodeWebhook};
