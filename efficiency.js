@@ -43,14 +43,14 @@ function createEfficiency({db,staff}){
   }
   return {save,favorite,remove,favorites,activeOrders,order,summary};
 }
-function createEfficiencyHandler({discord,model,commerce,payments,features,staff,smscode,operations}){
+function createEfficiencyHandler({discord,model,commerce,payments,features,staff,smscode,operations,otpPanel=null}){
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder}=discord;
   const row=xs=>new ActionRowBuilder().addComponents(...xs.map(([id,label])=>new ButtonBuilder().setCustomId(id).setLabel(String(label).slice(0,80)).setStyle(ButtonStyle.Secondary)));
   const money=n=>Number(n || 0).toLocaleString('id-ID')+' IDR';
   const nav=(prefix,r,back)=>{const n=row([[prefix+(r.page-1),'Sebelumnya'],[prefix+(r.page+1),'Berikutnya'],[back,'Kembali']]);n.components[0].setDisabled(r.page===0);n.components[1].setDisabled(r.page===r.pages-1);return n;};
   return async i=>{
     const id=String(i.customId || ''),upload=i.isChatInputCommand?.() && i.commandName==='bukti';
-    if(!upload && !/^(favorites(?::|$)|favorite_(save|detail|delete):|shop_orders$|active_orders:|active_order:|active_invoice$|manual_upload$|manual_upload_submit$|admin_eff_summary$)/.test(id))return false;
+    if(!upload && !/^(favorites(?::|$)|favorite_(save|detail|delete):|active_orders:|active_order:|active_invoice$|manual_upload$|manual_upload_submit$|admin_eff_summary$)/.test(id))return false;
     if(id==='admin_eff_summary' && !staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     if(id==='manual_upload'){
       try{await i.showModal(proofUploadModal(typeof discord.ModalSubmitFields?.prototype?.getUploadedFiles==='function'));}
@@ -76,14 +76,12 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
         await i.editReply({content:`**⭐ Favorit Saya**\n${r.count} favorit • halaman ${r.page+1}/${r.pages}\n${r.count?'Pilih favorit untuk membeli atau menghapusnya.':'Simpan favorit dari halaman Konfirmasi Pembelian.'}`,components});
       }else if(id.startsWith('favorite_detail:')){
         const f=model.favorite(user,id.split(':')[1]);await i.editReply({content:`⭐ **${f.name}**\nNegara ID: ${f.country} • operator: ${f.operator==='any'?'Any':f.operator}\nBuka untuk melihat harga dan stok terbaru.`,components:[row([['favorite_open:'+f.id,'Lihat Harga & Stok'],['favorite_delete:'+f.id,'Hapus Favorit'],['favorites','Kembali'],['tool_stock:'+f.id,'Notifikasi Stok On/Off']])]});
-      }else if(id==='shop_orders'){
-        const r=model.activeOrders(user);await i.editReply({content:`**📦 Pesanan Saya**\n${r.count} pesanan OTP aktif.`,components:[row([['active_orders:0','OTP Aktif'],['shop_order_history','Riwayat OTP'],['manual_orders:0','Pesanan Manual']])]});
       }else if(id.startsWith('active_orders:')){
         const r=model.activeOrders(user,Number(id.split(':')[1])),components=[];
         if(r.rows.length)components.push(row(r.rows.map(o=>['active_order:'+o.id,`#${o.provider_order_id} • ${o.phone || '-'} • ${o.otp?'OTP diterima':'menunggu'}`])));components.push(nav('active_orders:',r,'shop_orders'));
         await i.editReply({content:`**📦 Pesanan Aktif**\n${r.count} pesanan • halaman ${r.page+1}/${r.pages}\nPesanan yang menunggu OTP ditampilkan dahulu.`,components});
       }else if(id.startsWith('active_order:')){
-        const o=model.order(user,id.split(':')[1]);await i.editReply({content:`**${o.product_name || 'Pesanan OTP'}**\nOrder: ${o.provider_order_id}\nNomor: ${o.phone || '-'}\nStatus terakhir: ${o.status}\nHarga: ${money(o.amount)}\nTekan Cek OTP untuk memperbarui status.`,components:[row([['check_otp:'+o.provider_order_id,'Cek OTP'],['cancel_order:'+o.provider_order_id,'Batalkan'],['buy_again:'+o.id,'Beli Lagi'],['active_orders:0','Kembali']])]});
+        const o=model.order(user,id.split(':')[1]);if(otpPanel){const p=otpPanel(o.provider_order_id,user);p.content='**'+(o.product_name||'Pesanan OTP')+'** • Harga: '+money(o.amount)+'\n\n'+p.content;await i.editReply(p);return true;}await i.editReply({content:`**${o.product_name || 'Pesanan OTP'}**\nOrder: ${o.provider_order_id}\nNomor: ${o.phone || '-'}\nStatus terakhir: ${o.status}\nHarga: ${money(o.amount)}\nTekan Cek OTP untuk memperbarui status.`,components:[row([['check_otp:'+o.provider_order_id,'Cek OTP'],['cancel_order:'+o.provider_order_id,'Batalkan'],['buy_again:'+o.id,'Beli Lagi'],['active_orders:0','Kembali']])]});
       }else if(id==='active_invoice'){
         const p=payments.active(user);
         if(!p){await i.editReply({content:'Tidak ada tagihan QRIS aktif.',components:[row([['shop_topup','Isi Saldo']])]});return true;}

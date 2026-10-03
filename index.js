@@ -366,7 +366,7 @@ async function startDiscord(){
   configureBuyerProfiles(buyerProfiles);
   commerce.setCoupons(toolkit.coupons);
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
-  const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
+  const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations,otpPanel:handleOTPLifecycle.panel});
   const measureStorage=createStorageHealth({databasePath,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups"),volumePath:process.env.RAILWAY_VOLUME_MOUNT_PATH,appDir:__dirname});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:async()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024,storage:await measureStorage()};},audit:toolkit.audit});
   const premiumProducts=createPremiumProducts({db,staff,language:id=>languages.get(id),products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));}});
@@ -380,7 +380,7 @@ async function startDiscord(){
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true,isOwner:id=>staff.isOwner(id)});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),language:id=>languages.get(id),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
   const handleStaff=createStaffHandler({discord:require("discord.js"),staff,resolveUser:id=>client.users.fetch(id)});
-  const handleOwnerProvider=createOwnerProviderHandler({discord:require("discord.js"),staff,commerce,smscode,smsCatalogProducts});
+  const handleOwnerProvider=createOwnerProviderHandler({discord:require("discord.js"),staff,commerce,smscode,smsCatalogProducts,otpPanel:handleOTPLifecycle.panel});
   const handleSMSWebhook=createSMSCodeWebhookHandler({staff});
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess,resolveChannel:id=>client.channels.fetch(id),resolveRole:async(guildId,roleId)=>(await client.guilds.fetch(guildId)).roles.fetch(roleId)});
