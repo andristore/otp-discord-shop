@@ -81,7 +81,7 @@ function createStoreFeatureHandler({discord,features,staff}){
         const r=features.requests(i.user.id,Number(id.split(':')[1]),admin?i.user.id:undefined),components=[];
         if(r.rows.length)components.push(row(r.rows.map(v=>[(admin?'admin_store_detail:':'manual_request_detail:')+v.id,`${money(v.amount)} • ${v.status} • ${v.id}`])));
         const prefix=admin?'admin_store_requests:':'manual_request_list:';
-        const nav=row([[prefix+(r.page-1),'Sebelumnya'],[prefix+(r.page+1),'Berikutnya'],[admin?'admin_transactions_menu':'topup_manual','Kembali']]);nav.components[0].setDisabled(r.page===0);nav.components[1].setDisabled(r.page===r.pages-1);components.push(nav);
+        const nav=row([[prefix+(r.page-1),'Sebelumnya'],[prefix+(r.page+1),'Berikutnya'],[admin?'admin_payment_requests':'topup_manual','Kembali']]);nav.components[0].setDisabled(r.page===0);nav.components[1].setDisabled(r.page===r.pages-1);components.push(nav);
         await i.editReply({content:`**${admin?'Pengajuan Manual Menunggu':'Status Pengajuan Saya'}**\nHalaman ${r.page+1}/${r.pages} • ${r.count} pengajuan`,components});return true;
       }
       if(id.startsWith('manual_request_detail:') || id.startsWith('admin_store_detail:')){

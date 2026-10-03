@@ -29,6 +29,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     CREATE TABLE IF NOT EXISTS manual_product_stock(id INTEGER PRIMARY KEY AUTOINCREMENT,product_id INTEGER NOT NULL,
       body TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'available',order_id TEXT UNIQUE);
     CREATE INDEX IF NOT EXISTS manual_stock_available ON manual_product_stock(product_id,state);
+    CREATE TABLE IF NOT EXISTS manual_admin_search(id TEXT PRIMARY KEY,admin_id TEXT NOT NULL,query TEXT NOT NULL,expires_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS manual_product_edit_events(id TEXT PRIMARY KEY,admin_id TEXT NOT NULL,product_id INTEGER NOT NULL,request_hash TEXT NOT NULL);`);
   let notifier,polling=false;const notifying=new Set();
   const admin=id=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');};
@@ -89,6 +90,12 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     return {count,pages,page,rows:db.prepare(query+' LIMIT ? OFFSET ?').all(...args,size,page*size)};
   }
   function catalog(user,requested=0,asAdmin=false){if(asAdmin)admin(user);return page('SELECT * FROM manual_products WHERE deleted=0 AND parent_id IS NULL'+(asAdmin?'':' AND enabled=1')+' ORDER BY id DESC',[],requested);}
+  function search(user,key,requested=0,query){
+    admin(user);db.prepare('DELETE FROM manual_admin_search WHERE expires_at<?').run(Date.now());
+    if(query!==undefined){query=String(query||'').trim();if(!query||query.length>80)throw Error('Kata pencarian harus 1–80 karakter.');key=randomUUID();db.prepare('INSERT INTO manual_admin_search VALUES(?,?,?,?)').run(key,user,query,Date.now()+15*60000);}
+    const session=db.prepare('SELECT * FROM manual_admin_search WHERE id=? AND admin_id=? AND expires_at>=?').get(key,user,Date.now());if(!session)throw Error('Pencarian kedaluwarsa. Cari produk kembali.');
+    const r=page("SELECT p.* FROM manual_products p WHERE p.deleted=0 AND (p.parent_id IS NULL OR EXISTS(SELECT 1 FROM manual_products root WHERE root.id=p.parent_id AND root.deleted=0)) AND instr(lower(p.name),lower(?))>0 ORDER BY p.id DESC",[session.query],requested,5);return {...r,key,query:session.query};
+  }
   function quote(user,id){if(maintenance())throw Error('Toko sedang maintenance.');const p=product(id);if(!p.enabled||(p.parent_id&&!product(p.parent_id).enabled))throw Error('Produk sedang nonaktif.');
     const token=randomUUID();db.prepare('DELETE FROM manual_product_quotes WHERE expires_at<? AND id NOT IN (SELECT id FROM manual_product_orders)').run(Date.now());
     if(p.quantity===0)throw Error('Stok jual habis.');if(p.auto_enabled&&!stockCount(id))throw Error('Data kirim otomatis belum tersedia.');
@@ -144,7 +151,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET balance=balance+excluded.balance').run(o.discord_id,o.amount);
     restoreQuantity(o);db.prepare("UPDATE manual_product_orders SET state='refunded',admin_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(user,id);audit(user,'Refund pesanan manual '+id);return getOrder(user,id,true);
   });
-  return {catalog,product,preview,testPreview,remove,save,quote,buy,orders,getOrder,finish,refund,stockCount,sellStock,stocks,stock,saveStock,saveWithStock,createWithStock,toggleAuto,createQR,refresh,fulfillPayment,poll,notify,setNotifier:fn=>notifier=fn,orderByInvoice:(user,id)=>{const o=db.prepare('SELECT * FROM manual_product_orders WHERE invoice_id=? AND discord_id=?').get(id,user);if(!o)throw Error('Tagihan tidak ditemukan.');return o;},payment:o=>payments?.get(o.invoice_id,o.discord_id),qrisConfigured:()=>!!payments?.configured};
+  return {catalog,search,product,preview,testPreview,remove,save,quote,buy,orders,getOrder,finish,refund,stockCount,sellStock,stocks,stock,saveStock,saveWithStock,createWithStock,toggleAuto,createQR,refresh,fulfillPayment,poll,notify,setNotifier:fn=>notifier=fn,orderByInvoice:(user,id)=>{const o=db.prepare('SELECT * FROM manual_product_orders WHERE invoice_id=? AND discord_id=?').get(id,user);if(!o)throw Error('Tagihan tidak ditemukan.');return o;},payment:o=>payments?.get(o.invoice_id,o.discord_id),qrisConfigured:()=>!!payments?.configured};
 }
 
 function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},premium}) {
@@ -158,8 +165,10 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
     const data=model.catalog(user,p,admin),components=[];
     for(let n=0;n<data.rows.length;n+=5)components.push(row(...data.rows.slice(n,n+5).map(x=>button(`${admin?'admin_manual_detail':'manual_detail'}:${x.id}`,x.name))));
     components.push(row(button(`${admin?'admin_manual_catalog':'manual_catalog'}:${data.page-1}`,'Sebelumnya',1).setDisabled(data.page===0),button(`${admin?'admin_manual_catalog':'manual_catalog'}:${data.page+1}`,'Berikutnya',1).setDisabled(data.page===data.pages-1),...(admin?[button('admin_manual_add','Tambah Produk',3)]:[]),button(admin?'admin_catalog_manual':'manual_back','Kembali',1),home(admin)));
+    if(admin)components.push(row(button('admin_manual_search','Cari Produk',1)));
     return {content:'',embeds:[embed('📦 Produk Manual',`${data.count?'Pilih produk di bawah.':'Belum ada produk manual tersedia.'}\n\nPembayaran saldo atau QRIS. Produk dengan stok otomatis dikirim setelah pembayaran terverifikasi.\nHalaman ${data.page+1}/${data.pages} • ${data.count} produk`)],components};
   }
+  function searchView(user,key,page,query){const r=model.search(user,key,page,query);return {content:`**Hasil Pencarian Produk**\nKata: ${safe(r.query)}\nHalaman ${r.page+1}/${r.pages} • ${r.count} hasil\n${r.count?'Pilih produk atau varian untuk mengelolanya.':'Tidak ada produk yang cocok.'}`,allowedMentions:{parse:[]},embeds:[],components:[...(r.rows.length?[row(...r.rows.map(p=>button('admin_manual_detail:'+p.id,p.name,2)))]:[]),row(button('admin_manual_search_page:'+r.key+':'+(r.page-1),'Sebelumnya',1).setDisabled(!r.page),button('admin_manual_search_page:'+r.key+':'+(r.page+1),'Berikutnya',1).setDisabled(r.page===r.pages-1),button('admin_manual_search','Cari Lagi',1)),row(button('admin_manual_catalog:0','Kembali',1),home(true))]};}
   function detail(p,admin) {
     const extras=premium?`\n${p.duration_days?'Masa aktif: '+p.duration_days+' hari setelah pesanan selesai.\n':''}${p.warranty_days?'Garansi: '+p.warranty_days+' hari setelah pesanan selesai.\n':''}`:'';
     const components=[admin?row(button('admin_manual_edit:'+p.id,'Ubah Produk',1),button('admin_manual_delivery_data:'+p.id+':0','Data & Stok',1),button('admin_manual_settings:'+p.id,'Pengaturan',1)):row(button('manual_quote:'+p.id,'Beli Produk',3))];
@@ -170,7 +179,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
   function order(o,admin) {return {content:`Pembeli: ${buyerLabel(o.discord_id)}\n\n**Pesanan Manual #${o.id}**\nProduk: ${safe(o.product_name)}\nHarga: ${money(o.amount)}\nPembayaran: ${o.payment_method==='qris'?'QRIS':'Saldo'}\nStatus: ${status(o)}\n${premium&&o.expires_ms?'Masa aktif berakhir: <t:'+Math.floor(o.expires_ms/1000)+':F>\n':''}${premium&&o.warranty_ms?'Garansi sampai: <t:'+Math.floor(o.warranty_ms/1000)+':F>\n':''}`,allowedMentions:{parse:[]},embeds:[o.delivery?embed('Hasil / keterangan pengiriman',safe(o.delivery)):embed('Detail Produk',safe(o.description)),...(premium&&o.state==='completed'&&o.guide_snapshot?[embed('Panduan Penggunaan',safe(o.guide_snapshot))]:[])],components:[...(premium&&!admin&&o.state==='completed'&&o.warranty_ms?[row(button('premium_claim:'+o.id,'Klaim Garansi',1))]:[]),...(o.state==='awaiting_payment'?[row(button((admin?'admin_manual_payment_check:':'manual_payment_check:')+o.id,'Cek QRIS & Pesanan',3))]:[]),...(admin&&o.state==='pending'?[row(button('admin_manual_deliver:'+o.id,'Kirim / Selesaikan',3),button('admin_manual_refund_confirm:'+o.id,'Batalkan & Refund',4))]:[]),row(button(admin?'admin_manual_orders:0':'shop_orders','Kembali',1),home(admin))]};}
   function orders(user,p,admin) {const data=model.orders(user,p,admin),components=[];
     for(let n=0;n<data.rows.length;n+=5)components.push(row(...data.rows.slice(n,n+5).map(o=>button(`${admin?'admin_manual_order':'manual_order'}:${o.id}`,`${o.product_name} • ${status(o)} • ${money(o.amount)}`))));
-    components.push(row(button(`${admin?'admin_manual_orders':'manual_orders'}:${data.page-1}`,'Sebelumnya',1).setDisabled(data.page===0),button(`${admin?'admin_manual_orders':'manual_orders'}:${data.page+1}`,'Berikutnya',1).setDisabled(data.page===data.pages-1),button(admin?'admin_manual_catalog:0':'manual_catalog:0','Kembali',1),home(admin)));
+    components.push(row(button(`${admin?'admin_manual_orders':'manual_orders'}:${data.page-1}`,'Sebelumnya',1).setDisabled(data.page===0),button(`${admin?'admin_manual_orders':'manual_orders'}:${data.page+1}`,'Berikutnya',1).setDisabled(data.page===data.pages-1),button(admin?'admin_payment_requests':'manual_catalog:0','Kembali',1),home(admin)));
     return {content:`**Pesanan Produk Manual**\n${data.count?'Pilih pesanan untuk melihat detail.':'Belum ada pesanan.'}\nHalaman ${data.page+1}/${data.pages} • ${data.count} pesanan`,embeds:[],components};
   }
   function editView(p,user){
@@ -199,7 +208,8 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
     try {
       if(i.isModalSubmit()) {
         const value=k=>i.fields.getTextInputValue(k);
-        if(key==='admin_manual_save') {
+        if(key==='admin_manual_search_submit'){await i.reply({ephemeral:true,...searchView(user,null,0,value('query'))});}
+        else if(key==='admin_manual_save') {
           let body='';try{body=value('stock');}catch{}
           let quantity;try{quantity=value('quantity');}catch{}const p=model.createWithStock(user,{name:value('name'),description:value('description'),price:value('price'),enabled:1,quantity},body,i.id);await i.reply({ephemeral:true,...detail(p,true)});
         }else if(key==='admin_manual_data_save' || key==='admin_manual_price_save') {
@@ -211,7 +221,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
         }else if(key==='manual_qris_email') {
           await i.deferReply({ephemeral:true});const result=await model.createQR(user,arg,{email:value('email'),name:i.user.username});await i.editReply(paymentView(result.order,result.payment));
         }else if(key==='admin_manual_deliver_save') {
-          const o=model.finish(user,arg,value('delivery'));await i.reply({ephemeral:true,...order(o,true)});const sent=await notify(o);if(!sent)await i.followUp({ephemeral:true,content:'DM pembeli tidak terkirim. Hasil tetap tersimpan dan bisa dibaca di Produk Manual → Pesanan Manual.'});
+          const o=model.finish(user,arg,value('delivery'));await i.reply({ephemeral:true,...order(o,true)});const sent=await notify(o);if(!sent)await i.followUp({ephemeral:true,content:'DM pembeli tidak terkirim. Hasil tetap tersimpan dan bisa dibaca di Pesanan → Riwayat Pesanan.'});
         }else throw Error('Form produk manual tidak dikenali.');
         return true;
       }
@@ -220,6 +230,8 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
       else if(key==='manual_catalog' || key==='admin_manual_catalog')await i.update(catalog(user,Number(arg),admin));
       else if(key==='manual_orders' || key==='admin_manual_orders')await i.reply({ephemeral:true,...orders(user,Number(arg),admin)});
       else if(key==='manual_detail' || key==='admin_manual_detail'){const p=model.product(arg);if(!admin&&!p.enabled)throw Error('Produk sedang nonaktif.');await i.update(detail(p,admin));}
+      else if(id==='admin_manual_search')await i.showModal(modal('admin_manual_search_submit','Cari Produk',[['query','Nama produk / varian','',80]]));
+      else if(key==='admin_manual_search_page')await i.update(searchView(user,arg,Number(parts[2]||0)));
       else if(id==='admin_manual_add')await i.showModal(modal('admin_manual_save','Tambah Produk Manual',[['name','Nama produk','Produk baru',80],['quantity','Jumlah stok jual (angka)','1',7],['stock','Data DM unik: 1 akun/kode (opsional)','',1000,true,false],['description','Deskripsi & waktu proses','Jelaskan produk dan perkiraan waktu proses.',800,true],['price','Harga jual IDR, tanpa titik','5000',7]]));
       else if(key==='admin_manual_delete_confirm'){const p=model.product(arg);await i.reply({ephemeral:true,content:`Hapus produk **${safe(p.name)}** dari katalog?\nRiwayat pesanan tetap tersimpan. Tagihan QRIS yang sudah dibuat tetap diproses sesuai pesanan.`,allowedMentions:{parse:[]},components:[row(button('admin_manual_delete:'+p.id,'Ya, Hapus Produk',4),button('admin_manual_settings:'+p.id,'Batal',1),home(true))]});}
       else if(key==='admin_manual_delete'){model.remove(user,arg);await i.update(catalog(user,0,true));}

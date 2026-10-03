@@ -177,7 +177,7 @@ function createOperationsHandler({discord,ops}) {
       } else if(id==='admin_payment_issues' || id.startsWith('admin_ops_issues:')) {
         const r=ops.issues(Number(id.split(':')[1]) || 0);
         const components=r.rows.length?[buttons(r.rows.map(x=>['admin_ops_issue:'+x.invoice_id,`${money(x.amount)} • ${x.discord_id}`]))]:[];
-        const nav=buttons([[`admin_ops_issues:${r.page-1}`,'Sebelumnya'],[`admin_ops_issues:${r.page+1}`,'Berikutnya'],['admin_transactions_menu','Kembali']]);nav.components[0].setDisabled(r.page===0);nav.components[1].setDisabled(r.page===r.pages-1);components.push(nav);
+        const nav=buttons([[`admin_ops_issues:${r.page-1}`,'Sebelumnya'],[`admin_ops_issues:${r.page+1}`,'Berikutnya'],['admin_payment_checks','Kembali']]);nav.components[0].setDisabled(r.page===0);nav.components[1].setDisabled(r.page===r.pages-1);components.push(nav);
         await i.editReply({content:`**Pembayaran Perlu Diperiksa**\nHalaman ${r.page+1}/${r.pages} • ${r.count} transaksi\n${r.count?'Pilih transaksi untuk memeriksa dan menyelesaikan.':'Tidak ada transaksi bermasalah.'}`,components});
       } else if(id.startsWith('admin_ops_issue:')) {
         const r=ops.issue(id.split(':')[1]);if(!r)throw new Error('Tagihan tidak ditemukan.');
