@@ -325,7 +325,7 @@ async function startDiscord(){
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
   const handleStaff=createStaffHandler({discord:require("discord.js"),staff,resolveUser:id=>client.users.fetch(id)});
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
-  const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess});
+  const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess,resolveChannel:id=>client.channels.fetch(id),resolveRole:async(guildId,roleId)=>(await client.guilds.fetch(guildId)).roles.fetch(roleId)});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments});
   const handleStoreFeatures=createStoreFeatureHandler({discord:require("discord.js"),features:storeFeatures,staff});
   direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(withHome(handleDirect.status(row)));});

@@ -69,7 +69,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
       ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway']]);
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Akses, backup, dan pemantauan toko.',[
-      ['admin_staff_access','Izin & Admin'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Koneksi Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
+      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Koneksi Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
   }
   async function buyerBalances(requested=0) {
     const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();

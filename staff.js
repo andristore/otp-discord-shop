@@ -46,8 +46,8 @@ function createStaffHandler({discord,staff,resolveUser}) {
     const id=String(i.customId || '');if(!id.startsWith('admin_staff_'))return false;
     if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     if(id==='admin_staff_access') {
-      const r=row([['admin_ops_guilds','Izin Server'],['admin_staff_list:0','Admin Toko'],['admin_staff_contact','Kontak Admin Server'],['admin_transactions_menu','Kembali']]);r.components[1].setDisabled(!staff.isOwner(i.user.id));r.components[2].setDisabled(!staff.isOwner(i.user.id));
-      await i.reply({ephemeral:true,content:'**Izin & Admin**\nKelola izin server. Pengaturan admin toko hanya tersedia untuk owner.',components:[r]});return true;
+      const r=row([['admin_staff_list:0','Kelola Admin Toko'],['admin_system_menu','Kembali']]);r.components[0].setDisabled(!staff.isOwner(i.user.id));
+      await i.reply({ephemeral:true,content:'**Admin Toko**\nOwner dapat menambahkan dan mencabut akses admin toko.',components:[r]});return true;
     }
     if(!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Hanya owner toko yang boleh mengelola admin.'});return true;}
     if(id==='admin_staff_contact') {
@@ -64,7 +64,7 @@ function createStaffHandler({discord,staff,resolveUser}) {
         const target=i.fields.getTextInputValue('id').trim(),user=await resolveUser(target);
         if(!user||user.bot)throw Error('Pilih akun admin pengguna, bukan bot.');
         staff.setContact(i.user.id,i.guildId,target);
-        await i.editReply({content:`✅ Kontak admin server ini: <@${target}>. Server lain tetap memakai kontak masing-masing.`,allowedMentions:{parse:[]},components:[row([['admin_staff_access','Kembali']])]});
+        await i.editReply({content:`✅ Kontak admin server ini: <@${target}>. Server lain tetap memakai kontak masing-masing.`,allowedMentions:{parse:[]},components:[row([['admin_ops_server_menu','Kembali']])]});
       }else if(id==='admin_staff_save') {
         const target=i.fields.getTextInputValue('id').trim();if(!/^\d{17,20}$/.test(target))throw new Error('ID pengguna tidak valid.');
         const user=await resolveUser(target);if(!user || user.bot)throw new Error('Gunakan ID akun pengguna, bukan bot.');
