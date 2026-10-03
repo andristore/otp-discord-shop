@@ -75,8 +75,8 @@ function withHome(payload, requestedHome) {
   return {...result, components: validateComponents(rows)};
 }
 
-function addHomeNavigation(interaction) {
-  const homeId = ['admin','ping'].includes(interaction.commandName) || /^(admin_|provider_)/.test(String(interaction.customId || '')) ? ADMIN_HOME_ID : HOME_ID;
+function addHomeNavigation(interaction, staff) {
+  const homeId = staff?.isAdmin?.(interaction.user?.id) || staff?.isOwner?.(interaction.user?.id) || ['admin','ping'].includes(interaction.commandName) || /^(admin_|provider_)/.test(String(interaction.customId || '')) ? ADMIN_HOME_ID : HOME_ID;
   for (const method of ['reply', 'editReply', 'update', 'followUp']) {
     if (typeof interaction[method] !== 'function') continue;
     const original = interaction[method].bind(interaction);

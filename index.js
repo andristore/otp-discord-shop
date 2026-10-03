@@ -397,8 +397,9 @@ async function startDiscord(){
       rememberBuyer(i.user);buyerManagement.touch(i.user.id);
       if(await languages.handle(i,()=>({embeds:[shopEmbed()],components:mainRow()})))return;
       if(await languages.onboard(i))return;
-      addHomeNavigation(i);
+      addHomeNavigation(i,staff);
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
+        if(i.customId===HOME_ID&&staff.isAdmin(i.user.id))return handleAdmin(i);
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
       if(await handleOTPLifecycle(i))return;

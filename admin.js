@@ -172,7 +172,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(['admin_health','admin_test_otp','admin_payment_issues'].includes(i.customId))return false;
     const command=i.isChatInputCommand() && i.commandName==='admin';
     const pingCommand=i.isChatInputCommand() && i.commandName==='ping';
-    if(!command && !pingCommand && !String(i.customId || '').startsWith('admin_')) return false;
+    if(!command && !pingCommand && !String(i.customId || '').startsWith('admin_') && i.customId!=='shop_home') return false;
     if(!isDiscordAdmin(i.user.id)) {
       await i.reply({ephemeral:true,content:'Akses ditolak. ID Discord Anda belum terdaftar sebagai admin toko.'});
       return true;
@@ -228,7 +228,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         else await i.showModal(productModal(p));
       }
       else if(i.customId==='admin_add') await i.showModal(productModal());
-      else if(i.customId==='admin_home') await i.update(privateMenu(home(i.user.id),isOwner(i.user.id)));
+      else if(i.customId==='admin_home'||i.customId==='shop_home') await i.update(privateMenu(home(i.user.id),isOwner(i.user.id)));
       else if(i.customId==='admin_close') await i.update({content:'Panel admin ditutup. Ketik /admin untuk membukanya kembali.',embeds:[],components:[]});
       else if(i.customId.startsWith('admin_products:')) await i.update(products(Number(i.customId.split(':')[1])));
       return true;
