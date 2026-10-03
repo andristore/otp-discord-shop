@@ -278,7 +278,7 @@ const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAcces
 const languages=createLanguages({db,staff});
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM,resolveInfoChannel:async id=>{const c=await client.channels.fetch(id);if(!c)return null;const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);return {id:c.id,guildId:c.guildId,type:c.type,canInfo:!!p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages),send:payload=>c.send(payload)};}});
 manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
-const digiflazz=createDigiflazz({db,pricing,assertOpen:assertStoreOpen});
+const digiflazz=createDigiflazz({db,pricing,assertOpen:assertStoreOpen,staff,sendDM:sendDiscordDM,audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 digiflazz.mount(app);
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
@@ -370,7 +370,7 @@ async function startDiscord(){
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess,resolveChannel:id=>client.channels.fetch(id),resolveRole:async(guildId,roleId)=>(await client.guilds.fetch(guildId)).roles.fetch(roleId)});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments,language:id=>languages.get(id)});
   const handleStoreFeatures=createStoreFeatureHandler({discord:require("discord.js"),features:storeFeatures,staff});
-  const handleDigiflazz=createDigiflazzHandler({discord:require("discord.js"),model:digiflazz,getBalance});
+  const handleDigiflazz=createDigiflazzHandler({discord:require("discord.js"),model:digiflazz,getBalance,staff});
   direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(languages.translate(withHome(handleDirect.status(row)),row.discord_id,'delivery'));});
   client.on("interactionCreate", async i=>{
     try {

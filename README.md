@@ -10,9 +10,13 @@ Bot Discord untuk menjual produk digital, OTP SMSCode, dan top up game otomatis 
 4. Pasang volume dengan Mount Path `/data`, lalu isi `DB_PATH=/data/shop.db`.
 5. Jalankan bot dengan `node index.js`, tunggu deployment selesai, kemudian buka menu baru di Discord.
 
-**Pembaruan terbaru:** ganti `payments.js`, `midtrans.js`, `shop-health.js`, `shop-tools.js`, dan `navigation.js`, serta README/panduan. Tidak ada dependency atau Variables baru.
+**Pembaruan terbaru (377 tes):** jika versi sebelumnya sudah terpasang, ganti `digiflazz.js` dan `languages.js`. Ada Peringatan, Keuntungan Game, Preset ID/Server, dan Game Favorit. Tidak ada dependency/Variables baru; migrasi database otomatis.
 
-**Jika penguatan Midtrans sebelumnya belum dipasang:** gunakan 5 file di atas ditambah `manual-products.js` dan `direct-payments.js` (total 7 file kode).
+**Pembaruan ringkasan brand:** jika versi 367 tes sudah terpasang, cukup ganti `digiflazz.js` dan `languages.js`. Buka `/admin → Digiflazz → Kelola Layanan` untuk status brand dan filter. Status berasal dari katalog tersimpan; Sinkron Katalog untuk memperbaruinya.
+
+**Pembaruan sebelumnya:** jika Digiflazz v1 sudah terpasang, ganti **6 file**: `index.js`, `admin.js`, `digiflazz.js`, `navigation.js`, `languages.js`, dan `order-history.js`. Perbarui README/panduan juga. Tidak ada dependency atau Variables baru; database tetap digunakan dan kolom baru ditambahkan otomatis.
+
+**Menu pembeli:** Beli OTP → Topup Game → Produk Lainnya. **Menu admin:** `/admin` → **Digiflazz**, terpisah dari Toko/OTP. Buka menu baru setelah deploy.
 
 Paket berisi **57 file: 28 modul runtime, 26 file tes, dan 3 panduan/konfigurasi**. File `.test.js` dipakai untuk pengujian. Catatan perubahan lengkap tersedia di `CARA_PASANG.txt`.
 
@@ -76,7 +80,28 @@ Isi Variables berikut di Railway:
 - `DIGIFLAZZ_CATEGORY=Games` untuk menampilkan kategori game.
 - `DIGIFLAZZ_SYNC_MINUTES=15` untuk interval sinkron katalog.
 
-Atur webhook Digiflazz ke `https://DOMAIN-BOT/webhooks/digiflazz` dan gunakan secret yang sama dengan `DIGIFLAZZ_WEBHOOK_SECRET`. Setelah deploy, katalog disinkron otomatis dan menu **Top Up Game** muncul di `/shop`. Pembayaran Top Up Game menggunakan saldo bot; member dapat mengisi saldo melalui sistem yang sudah ada. Status gagal mengembalikan saldo otomatis, sedangkan status pending dicek ulang dan dapat diperbarui melalui webhook.
+Atur webhook ke `https://DOMAIN-BOT/webhooks/digiflazz`, dengan secret yang sama. Katalog disinkron otomatis. Pembelian game menggunakan **saldo toko**; QRIS tetap untuk isi saldo melalui menu yang sudah ada.
+
+**Pembeli:** pilih game → produk → detail harga → ID/server → konfirmasi. Katalog 10 pilihan per halaman, pencarian nama/game/SKU, semua halaman dapat dijangkau. Status tersedia melalui Pesanan dan Riwayat Topup.
+
+**Admin → Digiflazz:**
+
+- Ringkasan brand: Aktif (semua SKU aktif dan tersedia), Sebagian tersedia, Tidak tersedia (ada SKU toko aktif, tetapi tidak tersedia), Ditutup admin (semua SKU dinonaktifkan atau seluruh layanan ditutup). Jumlah SKU tersedia/provider/toko ditampilkan.
+- Kelola layanan/produk: aktif/nonaktif per SKU atau seluruh game, harga tetap, format `id` / `concat` / `pipe`, dan petunjuk ID/server. Format harus sesuai produk/provider; nama pemain tidak diperiksa otomatis.
+- Pengaturan & Harga: buka/tutup layanan, markup persen dan tambahan IDR khusus Digiflazz. Harga tetap SKU mengalahkan markup. Saat pertama diperbarui, markup lama disalin; perubahan berikutnya terpisah dari OTP.
+- Cek Saldo Digiflazz, Sinkron Katalog, Koneksi & Webhook, Transaksi, serta Perlu Diperiksa. Seluruh menu ini khusus admin toko; kunci API tetap di Railway.
+
+**Pengaman:** batas modal `max_price`, cek status memakai ref sama, jeda minimal satu menit, terminal transaksi dipertahankan, gagal pasti refund sekali. Timeout tetap pending; tidak otomatis refund. Mode uji khusus owner, hasilnya bukan topup nyata. Pesanan pending yang berubah akun/mode atau berusia lebih dari 24 jam masuk review; cocokkan di dashboard Digiflazz, jangan buat transaksi pengganti. Pending lama sebelum pembaruan juga dapat masuk review karena identitas akun sebelumnya belum tersimpan.
+
+Hasil sukses/gagal dikirim ke DM, dengan percobaan ulang jika gagal. Pesanan produksi sukses ikut channel pesanan selesai yang sudah diatur; ID pemain dan SN tidak dipublikasikan. Katalog hilang/provider tutup menjadi tidak tersedia; pengaturan admin tetap disimpan saat sinkron. Produk baru mengikuti status aktif provider, sehingga periksa dan tutup layanan yang belum siap dijual.
+
+### Tambahan Digiflazz
+
+- **Peringatan → Atur Batas Saldo:** isi batas IDR. Nilai 0 mematikan. Saldo diperiksa maksimal setiap 5 menit; hanya owner menerima DM sekali per kejadian rendah. Pulih di atas batas mengaktifkan siklus baru. DM gagal dicoba ulang; kegagalan API tidak dianggap saldo 0.
+- **Peringatan → Kenaikan Modal:** daftar SKU yang modalnya naik saat sinkron, dengan harga sebelum/sesudah. Buka produk untuk mengatur harga; **Tandai Sudah Ditinjau** tidak mengubah harga. Kenaikan baru membuka catatan SKU yang sama. Owner mendapat DM dengan batas 10 per putaran.
+- **Kelola Layanan → pilih brand → Preset ID / Server:** atur format dan petunjuk seluruh brand. Produk baru mengikuti preset. SKU yang sudah diatur khusus tetap memakai pengecualiannya; isi `inherit` di Atur Produk untuk kembali mengikuti brand. Preset tidak menebak format dari nama game: ikuti petunjuk provider untuk tiap SKU.
+- **Keuntungan Game:** Hari Ini / Bulan Ini / Semua Waktu; memakai tanggal pesanan WIB dan modal aktual sukses. Mode uji, gagal, dan refund dikecualikan. Modal yang belum tercatat ditampilkan terpisah. Keuntungan ini kotor, belum dikurangi biaya isi saldo, biaya lain, atau pajak.
+- **Pembeli → Topup Game → pilih brand → Simpan / Hapus Favorit.** Daftar **Game Favorit** di halaman game tersimpan per pembeli, dengan pagination. Favorit tidak menjamin produk sedang tersedia.
 
 ## 5. QRIS dan webhook
 

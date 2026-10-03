@@ -16,18 +16,21 @@ const union=`SELECT 'otp:'||o.id AS key,'otp' AS kind,
 
 function createOrderHistory({db,now=Date.now}){
  const searches=new Map();
+ const hasGames=!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='digiflazz_orders'").get();
+ const allOrders=union+(hasGames?" UNION ALL SELECT 'game:'||g.id,'game',g.product_name,g.amount,g.status,datetime(g.created_ms/1000,'unixepoch'),g.ref_id FROM digiflazz_orders g WHERE g.discord_id=?":'');
  function list(user,requested=0,filter='all',criteria=null){
   if(!['all','otp'].includes(filter))throw Error('Kategori tidak dikenal.');
-  const args=[user,user,user],conditions=filter==='otp'?["kind='otp'"]:[];
+  const args=hasGames?[user,user,user,user]:[user,user,user],conditions=filter==='otp'?["kind='otp'"]:[];
   if(criteria){if(criteria.invoice){conditions.push("instr(lower(COALESCE(invoice,CASE WHEN kind='otp' THEN 'SALDO-OTP-' ELSE 'SALDO-PRODUK-' END||substr(key,instr(key,':')+1))),lower(?))>0");args.push(criteria.invoice);}if(criteria.product){conditions.push('instr(lower(name),lower(?))>0');args.push(criteria.product);}if(criteria.date){conditions.push("strftime('%Y-%m-%d',created_at,'+7 hours')=?");args.push(criteria.date);}}
-  const query='SELECT * FROM ('+union+')'+(conditions.length?' WHERE '+conditions.join(' AND '):'');
+  const query='SELECT * FROM ('+allOrders+')'+(conditions.length?' WHERE '+conditions.join(' AND '):'');
   const count=db.prepare('SELECT COUNT(*) n FROM ('+query+')').get(...args).n;
   const pages=Math.max(1,Math.ceil(count/5)),page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1);
   return {count,pages,page,rows:db.prepare(query+' ORDER BY created_at DESC,key DESC LIMIT 5 OFFSET ?').all(...args,page*5)};
  }
  function detail(user,key){
   const [type,...parts]=String(key).split(':'),id=parts.join(':');let row;
-  if(type==='digital'){
+  if(type==='game'&&hasGames){row=db.prepare("SELECT *,datetime(created_ms/1000,'unixepoch') created_at FROM digiflazz_orders WHERE id=? AND discord_id=?").get(id,user);if(row)return {...row,key,kind:'game',name:row.product_name,status:row.status,invoice:null,payment_method:'balance',receipt:row.ref_id};
+  }else if(type==='digital'){
    row=db.prepare('SELECT * FROM manual_product_orders WHERE id=? AND discord_id=?').get(id,user);
    if(row)return {...row,key,kind:'digital',name:row.product_name,status:row.state,invoice:row.invoice_id,receipt:row.invoice_id||'SALDO-PRODUK-'+row.id};
   }else if(type==='otp'){
@@ -64,10 +67,10 @@ function createOrderHistoryHandler({discord,model,payments,premium,language=()=>
  function view(user,page,filter,mode,search=null){
   const r=search||model.list(user,page,filter),components=[];
   const pageId=n=>search?`history_search_page:${r.key}:${n}`:`history_list:${filter}:${mode}:${n}`;
-  if(r.rows.length)components.push(row(...r.rows.map(o=>button('history_detail:'+o.key,(o.kind==='otp'?'OTP • ':'Produk • ')+o.name))));
+  if(r.rows.length)components.push(row(...r.rows.map(o=>button('history_detail:'+o.key,(o.kind==='otp'?'OTP • ':o.kind==='game'?'Game • ':'Produk • ')+o.name))));
   components.push(row(button(pageId(r.page-1),'Sebelumnya').setDisabled(r.page===0),button(pageId(r.page+1),'Berikutnya').setDisabled(r.page===r.pages-1),button('history_search:'+filter+':'+mode,'Cari Pesanan')));
   components.push(row(button('history_list:all:orders:0','Riwayat Pesanan'),button('history_list:all:invoices:0','Invoice'),button('history_list:otp:orders:0','Riwayat OTP'),button('shop_home','Menu Awal')));
-  return {content:`**${mode==='invoices'?t(user,'🧾 Invoice & Bukti Transaksi','🧾 Invoices & Receipts'):filter==='otp'?t(user,'🔢 Riwayat OTP','🔢 OTP History'):t(user,'📦 Riwayat Pesanan','📦 Order History')}**\n${r.count?t(user,'Pilih pesanan untuk melihat invoice, status, dan hasil.','Choose an order to view its invoice, status and delivery.'):t(user,'Belum ada pesanan.','No orders yet.')}\n${t(user,'Halaman ','Page ')}${r.page+1}/${r.pages} • ${r.count} ${t(user,'pesanan','orders')}\n\n`+r.rows.map(o=>`**${safe(o.name)}** • ${o.kind==='otp'?'OTP':t(user,'Produk Digital','Digital Product')}\n${money(o.amount)} • ${safe(o.state)}\n${mode==='invoices'?t(user,'Invoice / bukti: ','Invoice / receipt: ')+safe(o.invoice||(o.kind==='otp'?'SALDO-OTP-':'SALDO-PRODUK-')+o.key.split(':').slice(1).join(':'))+'\n':''}${t(user,'Tanggal: ','Date: ')}${safe(o.created_at)} UTC`).join('\n\n'),allowedMentions:{parse:[]},components};
+  return {content:`**${mode==='invoices'?t(user,'🧾 Invoice & Bukti Transaksi','🧾 Invoices & Receipts'):filter==='otp'?t(user,'🔢 Riwayat OTP','🔢 OTP History'):t(user,'📦 Riwayat Pesanan','📦 Order History')}**\n${r.count?t(user,'Pilih pesanan untuk melihat invoice, status, dan hasil.','Choose an order to view its invoice, status and delivery.'):t(user,'Belum ada pesanan.','No orders yet.')}\n${t(user,'Halaman ','Page ')}${r.page+1}/${r.pages} • ${r.count} ${t(user,'pesanan','orders')}\n\n`+r.rows.map(o=>`**${safe(o.name)}** • ${o.kind==='otp'?'OTP':o.kind==='game'?'Topup Game':t(user,'Produk Digital','Digital Product')}\n${money(o.amount)} • ${safe(o.state)}\n${mode==='invoices'?t(user,'Invoice / bukti: ','Invoice / receipt: ')+safe(o.invoice||(o.kind==='otp'?'SALDO-OTP-':'SALDO-PRODUK-')+o.key.split(':').slice(1).join(':'))+'\n':''}${t(user,'Tanggal: ','Date: ')}${safe(o.created_at)} UTC`).join('\n\n'),allowedMentions:{parse:[]},components};
  }
  return async i=>{
   const id=String(i.customId||'');
@@ -82,15 +85,16 @@ function createOrderHistoryHandler({discord,model,payments,premium,language=()=>
     await i.editReply(view(i.user.id,Number(id.startsWith('manual_orders:')?parts[1]:parts[3]||0),filter,mode));
    }else{
     const o=model.detail(i.user.id,id.slice('history_detail:'.length)),components=[],actions=[];
-    let content=`**🧾 ${t(i.user.id,'Detail Pesanan','Order Details')} • ${safe(o.name)}**\n${t(i.user.id,'Invoice / bukti transaksi','Invoice / transaction receipt')}: ${safe(o.receipt)}\n${t(i.user.id,'Jenis','Type')}: ${o.kind==='otp'?'OTP':t(i.user.id,'Produk Digital','Digital Product')}\n${t(i.user.id,'Metode pembayaran','Payment method')}: ${o.payment_method==='qris'?'QRIS':t(i.user.id,'Saldo','Balance')}\n${t(i.user.id,'Harga produk','Product price')}: **${money(o.amount)}**\n${t(i.user.id,'Status pesanan','Order status')}: ${safe(o.status)}\n${t(i.user.id,'Tanggal','Date')}: ${safe(o.created_at)} UTC`;
+    let content=`**🧾 ${t(i.user.id,'Detail Pesanan','Order Details')} • ${safe(o.name)}**\n${t(i.user.id,'Invoice / bukti transaksi','Invoice / transaction receipt')}: ${safe(o.receipt)}\n${t(i.user.id,'Jenis','Type')}: ${o.kind==='otp'?'OTP':o.kind==='game'?'Topup Game':t(i.user.id,'Produk Digital','Digital Product')}\n${t(i.user.id,'Metode pembayaran','Payment method')}: ${o.payment_method==='qris'?'QRIS':t(i.user.id,'Saldo','Balance')}\n${t(i.user.id,'Harga produk','Product price')}: **${money(o.amount)}**\n${t(i.user.id,'Status pesanan','Order status')}: ${safe(o.status)}\n${t(i.user.id,'Tanggal','Date')}: ${safe(o.created_at)} UTC`;
     let verifiedPayment;
     if(o.invoice){let p;try{p=payments.get(o.invoice,i.user.id);}catch{}
      verifiedPayment=p;
      if(p)content+=`\n${t(i.user.id,'Status pembayaran','Payment status')}: ${safe(p.status)}\n${t(i.user.id,'Biaya pembeli','Customer fee')}: ${money(p.fee_customer)}\n${t(i.user.id,'Total tagihan','Invoice total')}: ${money(p.total_charge??o.amount)}`;
      actions.push(button((o.kind==='digital'?'manual_invoice_check:':'direct_check:')+o.invoice,'Cek Pembayaran & Pesanan',3));
     }else content+='\n'+t(i.user.id,'Bukti pembayaran saldo internal toko.','Internal store balance payment receipt.');
-    content+='\n'+progressText(orderProgress(o,o.kind,verifiedPayment),language(i.user.id)==='en');
-    if(o.kind==='digital'){
+    if(o.kind!=='game')content+='\n'+progressText(orderProgress(o,o.kind,verifiedPayment),language(i.user.id)==='en');
+    if(o.kind==='game'){if(o.sn)content+='\nSN: '+safe(o.sn);if(o.refunded)content+='\nSaldo telah dikembalikan.';if(o.testing)content+='\nMODE UJI — bukan topup nyata.';actions.push(button('df_check:'+o.ref_id,'Cek Status',3),button('df_detail:'+o.product_id,'Beli Lagi'));
+    }else if(o.kind==='digital'){
      if(o.state==='completed'&&o.delivery)content+=`\n\n**${t(i.user.id,'Data Produk','Product Data')}**\n${safe(o.delivery)}`;
      actions.push(button('manual_repeat:'+o.id,'Beli Lagi'));
      if(premium&&o.state==='completed'){if(o.expires_ms)content+='\n'+t(i.user.id,'Masa aktif berakhir','Valid until')+': <t:'+Math.floor(o.expires_ms/1000)+':F>';if(o.warranty_ms){content+='\n'+t(i.user.id,'Garansi sampai','Warranty until')+': <t:'+Math.floor(o.warranty_ms/1000)+':F>';actions.push(button('premium_claim:'+o.id,'Klaim Garansi'));}}
@@ -127,7 +131,7 @@ function createOrderChannel({db,staff,resolveChannel,send,now=Date.now}){
  CASE WHEN EXISTS(SELECT 1 FROM direct_purchases d WHERE d.discord_id=o.discord_id AND d.provider_order_id=o.provider_order_id) THEN 'QRIS' ELSE 'Saldo' END AS method,'OTP' AS kind,${otpDelivery} AS delivery_state
  FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE o.status IN ('OTP_RECEIVED','COMPLETED') ${columns.includes('refunded')?'AND o.refunded=0':''} ${columns.includes('is_owner_test')?'AND COALESCE(o.is_owner_test,0)=0':''}
  UNION ALL SELECT 'digital:'||m.id,m.discord_id,m.product_name,m.amount,m.created_at,COALESCE(m.invoice_id,'SALDO-PRODUK-'||m.id),CASE WHEN m.payment_method='qris' THEN 'QRIS' ELSE 'Saldo' END,'Produk Digital',${digitalDelivery}
- FROM manual_product_orders m WHERE m.state='completed'`;
+ FROM manual_product_orders m WHERE m.state='completed'`+(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='digiflazz_orders'").get()?" UNION ALL SELECT 'game:'||g.id,g.discord_id,g.product_name,g.amount,datetime(g.created_ms/1000,'unixepoch'),g.ref_id,'Saldo','Topup Game',CASE WHEN g.notified=1 THEN 'sent' ELSE 'pending_dm' END FROM digiflazz_orders g WHERE g.status='success' AND g.refunded=0 AND g.testing=0":'');
  function discover(state='pending'){db.prepare('INSERT OR IGNORE INTO order_channel_receipts(order_key,state) SELECT key,? FROM ('+finished+')').run(state);}
  async function channel(guildId,channelId){const c=await resolveChannel(channelId);if(!c||c.guildId!==guildId||c.type!==0||!c.canReport)throw Error('Gunakan channel teks server yang bisa dilihat bot, dengan izin Kirim Pesan dan Embed Links.');return c;}
  const commit=db.transaction((guildId,channelId)=>{const old=config();if(!old.initialized)discover('skipped');db.prepare('UPDATE order_channel_settings SET guild_id=?,channel_id=?,enabled=1,initialized=1 WHERE id=1').run(guildId,channelId);});
@@ -150,7 +154,7 @@ function createOrderChannel({db,staff,resolveChannel,send,now=Date.now}){
 function createOrderChannelHandler({discord,model,staff}){
  const {ActionRowBuilder,ButtonBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
  const button=(id,label,style=1)=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style),row=(...b)=>new ActionRowBuilder().addComponents(...b);
- function view(){const s=model.stats(),c=s.config;return {content:`**Laporan Pesanan ke Channel**\nStatus: ${c.enabled?'Aktif':'Nonaktif'}\nServer: ${c.guild_id||'Belum diatur'}\nChannel: ${c.channel_id?'<#'+c.channel_id+'>':'Belum diatur'}\nTerkirim: ${s.sent} • Antrean: ${s.pending}\n\nMencakup OTP berhasil dan produk digital selesai. Data akun, password, dan OTP tidak ditampilkan. Riwayat lama hanya dikirim jika dipilih oleh owner.`,allowedMentions:{parse:[]},components:[row(button('admin_order_channel_config','Atur Channel'),button('admin_order_channel_test','Tes Channel'),button('admin_order_channel_backfill_confirm','Kirim Riwayat Lama')),row(button('admin_order_channel_disable','Nonaktifkan',4),button('admin_order_channel','Perbarui'),button('admin_reports_menu','Kembali'))]};}
+ function view(){const s=model.stats(),c=s.config;return {content:`**Laporan Pesanan ke Channel**\nStatus: ${c.enabled?'Aktif':'Nonaktif'}\nServer: ${c.guild_id||'Belum diatur'}\nChannel: ${c.channel_id?'<#'+c.channel_id+'>':'Belum diatur'}\nTerkirim: ${s.sent} • Antrean: ${s.pending}\n\nMencakup OTP, produk digital, dan topup game sukses dalam mode produksi. Data akun, password, dan OTP tidak ditampilkan. Riwayat lama hanya dikirim jika dipilih oleh owner.`,allowedMentions:{parse:[]},components:[row(button('admin_order_channel_config','Atur Channel'),button('admin_order_channel_test','Tes Channel'),button('admin_order_channel_backfill_confirm','Kirim Riwayat Lama')),row(button('admin_order_channel_disable','Nonaktifkan',4),button('admin_order_channel','Perbarui'),button('admin_reports_menu','Kembali'))]};}
  return async i=>{const id=String(i.customId||'');if(!/^admin_order_channel(?::|_|$)/.test(id))return false;if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
  try{if(id==='admin_order_channel'){await i.reply({ephemeral:true,...view()});return true;}if(!staff.isOwner(i.user.id))throw Error('Pengaturan tujuan laporan hanya untuk owner.');
  if(id==='admin_order_channel_config'){await i.showModal(new ModalBuilder().setCustomId('admin_order_channel_save').setTitle('Channel Laporan Pesanan').addComponents(...[['guild','ID server tujuan'],['channel','ID channel tujuan']].map(([key,label])=>row(new TextInputBuilder().setCustomId(key).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20)))));return true;}
