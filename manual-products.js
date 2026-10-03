@@ -162,8 +162,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
   }
   function detail(p,admin) {
     const extras=premium?`\n${p.duration_days?'Masa aktif: '+p.duration_days+' hari setelah pesanan selesai.\n':''}${p.warranty_days?'Garansi: '+p.warranty_days+' hari setelah pesanan selesai.\n':''}`:'';
-    const components=[admin?row(button('admin_manual_edit:'+p.id,'Ubah Produk',1),button('admin_manual_price:'+p.id,'Atur Harga Jual',3),button('admin_manual_toggle:'+p.id,p.enabled?'Nonaktifkan':'Aktifkan',p.enabled?4:3)):row(button('manual_quote:'+p.id,'Beli Produk',3))];
-    if(admin)components.push(row(button('admin_manual_auto:'+p.id,p.auto_enabled?'Matikan Kirim Otomatis':'Aktifkan Kirim Otomatis',1),button('admin_manual_test:'+p.id,'Tes Beli',1)));
+    const components=[admin?row(button('admin_manual_edit:'+p.id,'Ubah Produk',1),button('admin_manual_delivery_data:'+p.id+':0','Data & Stok',1),button('admin_manual_settings:'+p.id,'Pengaturan',1)):row(button('manual_quote:'+p.id,'Beli Produk',3))];
     if(premium&&!admin){const actions=[];if(premium.variants('',p.id).count)actions.push(button('premium_variants:'+(p.parent_id||p.id)+':0','Pilih Varian',2));if(!premium.available(p.id))actions.push(button('premium_watch:'+p.id,'Notifikasi Stok',1));if(actions.length)components.push(row(...actions));}
     components.push(row(button(admin?'admin_manual_catalog:0':'manual_catalog:0','Kembali',1),home(admin)));
     return {content:'',embeds:[embed('📦 '+p.name,`${safe(p.description)}\n\nHarga jual: **${money(p.price)}**\nStatus pengiriman: ${p.auto_enabled?'Otomatis':'Diproses admin'}\n${p.auto_enabled||admin?'Stok jual: '+model.sellStock(p)+'\n':''}${admin?`Status: ${p.enabled?'Aktif':'Nonaktif'}`:'Data dikirim setelah pembayaran terverifikasi.'}${extras}`)],components};
@@ -175,12 +174,15 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
     return {content:`**Pesanan Produk Manual**\n${data.count?'Pilih pesanan untuk melihat detail.':'Belum ada pesanan.'}\nHalaman ${data.page+1}/${data.pages} • ${data.count} pesanan`,embeds:[],components};
   }
   function editView(p,user){
-    return {content:'',embeds:[embed('Ubah Produk • '+p.name,`Stok jual: **${model.sellStock(p)}**\nData produk tersedia: **${model.stockCount(p.id)}**\n\nDeskripsi:\n${safe(p.description)}\n\nHarga jual: ${money(p.price)}`)],components:[row(button('admin_manual_data:'+p.id,'Ubah Produk',1),button('admin_manual_delivery_data:'+p.id+':0','Data Produk',1),button('admin_manual_delete_confirm:'+p.id,'Hapus Produk',4)),...(premium?[row(button('admin_premium_menu:'+p.id,'Varian, Panduan & Garansi',1))]:[]),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
+    return {content:'',embeds:[embed('Ubah Produk • '+p.name,`Deskripsi:\n${safe(p.description)}\n\nHarga jual: ${money(p.price)}`)],components:[row(button('admin_manual_data:'+p.id,'Nama & Deskripsi',1),button('admin_manual_price:'+p.id,'Harga Jual',3)),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
+  }
+  function settingsView(p){
+    return {content:'',embeds:[embed('Pengaturan • '+p.name,`Produk: **${p.enabled?'Aktif':'Nonaktif'}**\nPengiriman: **${p.auto_enabled?'Otomatis':'Diproses admin'}**\n\nAtur status, pengiriman, dan tes produk di sini.`)],components:[row(button('admin_manual_toggle:'+p.id,p.enabled?'Nonaktifkan Produk':'Aktifkan Produk',p.enabled?4:3),button('admin_manual_auto:'+p.id,p.auto_enabled?'Matikan Kirim Otomatis':'Aktifkan Kirim Otomatis',1)),row(...(premium?[button('admin_premium_menu:'+p.id,p.parent_id?'Panduan & Garansi':'Varian, Panduan & Garansi',1)]:[]),button('admin_manual_test:'+p.id,'Tes Beli',1)),row(button('admin_manual_delete_confirm:'+p.id,'Hapus Produk',4)),row(button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]};
   }
   function deliveryDataView(user,id,page=0){
     const p=model.product(id),data=model.stocks(user,id,page,true),components=[];
     for(let n=0;n<data.rows.length;n+=5)components.push(row(...data.rows.slice(n,n+5).map(s=>button('admin_manual_stock_edit:'+s.id,`Data Produk #${s.id}`,2))));
-    components.push(row(button('admin_manual_delivery_data:'+id+':'+(data.page-1),'Sebelumnya',1).setDisabled(data.page===0),button('admin_manual_delivery_data:'+id+':'+(data.page+1),'Berikutnya',1).setDisabled(data.page===data.pages-1),button('admin_manual_edit:'+id,'Kembali',1),home(true)));
+    components.push(row(button('admin_manual_delivery_data:'+id+':'+(data.page-1),'Sebelumnya',1).setDisabled(data.page===0),button('admin_manual_delivery_data:'+id+':'+(data.page+1),'Berikutnya',1).setDisabled(data.page===data.pages-1),button('admin_manual_detail:'+id,'Kembali',1),home(true)));
     components.push(row(button('admin_manual_stock_add:'+id,'Tambah Data Produk',3),button('admin_manual_quantity:'+id,'Atur Stok Jual',1),button('admin_manual_preview:'+id,'Pratinjau Pesan',1)));
     return {content:'',embeds:[embed('Data Produk • '+p.name,`Stok jual: **${model.sellStock(p)}**\nData siap kirim: **${data.count}**\n\n${data.count?'Pilih data untuk mengubah akun atau kode.':'Belum ada data siap kirim. Tekan Tambah Data Produk.'}\nSatu data unik untuk satu pembeli.\nHalaman ${data.page+1}/${data.pages}`)],components};
   }
@@ -201,7 +203,7 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
           let body='';try{body=value('stock');}catch{}
           let quantity;try{quantity=value('quantity');}catch{}const p=model.createWithStock(user,{name:value('name'),description:value('description'),price:value('price'),enabled:1,quantity},body,i.id);await i.reply({ephemeral:true,...detail(p,true)});
         }else if(key==='admin_manual_data_save' || key==='admin_manual_price_save') {
-          const old=model.product(arg);let p;if(key==='admin_manual_data_save'){let body='',quantity=old.quantity;try{body=value('stock');}catch{}try{const raw=value('quantity');if(raw!==undefined)quantity=raw;}catch{}p=model.saveWithStock(user,arg,{...old,name:value('name'),description:value('description'),quantity},body,i.id);}else p=model.save(user,arg,{...old,price:value('price')});await i.reply({ephemeral:true,...(key==='admin_manual_data_save'?editView(p,user):detail(p,true))});
+          const old=model.product(arg);let p;if(key==='admin_manual_data_save'){let body='',quantity=old.quantity;try{body=value('stock');}catch{}try{const raw=value('quantity');if(raw!==undefined)quantity=raw;}catch{}p=model.saveWithStock(user,arg,{...old,name:value('name'),description:value('description'),quantity},body,i.id);}else p=model.save(user,arg,{...old,price:value('price')});await i.reply({ephemeral:true,...editView(p,user)});
         }else if(key==='admin_manual_quantity_save') {
           const p=model.product(arg);model.save(user,arg,{...p,quantity:value('quantity')});await i.reply({ephemeral:true,...deliveryDataView(user,arg)});
         }else if(key==='admin_manual_stock_save') {
@@ -219,8 +221,9 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
       else if(key==='manual_orders' || key==='admin_manual_orders')await i.reply({ephemeral:true,...orders(user,Number(arg),admin)});
       else if(key==='manual_detail' || key==='admin_manual_detail'){const p=model.product(arg);if(!admin&&!p.enabled)throw Error('Produk sedang nonaktif.');await i.update(detail(p,admin));}
       else if(id==='admin_manual_add')await i.showModal(modal('admin_manual_save','Tambah Produk Manual',[['name','Nama produk','Produk baru',80],['quantity','Jumlah stok jual (angka)','1',7],['stock','Data DM unik: 1 akun/kode (opsional)','',1000,true,false],['description','Deskripsi & waktu proses','Jelaskan produk dan perkiraan waktu proses.',800,true],['price','Harga jual IDR, tanpa titik','5000',7]]));
-      else if(key==='admin_manual_delete_confirm'){const p=model.product(arg);await i.reply({ephemeral:true,content:`Hapus produk **${safe(p.name)}** dari katalog?\nRiwayat pesanan tetap tersimpan. Tagihan QRIS yang sudah dibuat tetap diproses sesuai pesanan.`,allowedMentions:{parse:[]},components:[row(button('admin_manual_delete:'+p.id,'Ya, Hapus Produk',4),button('admin_manual_edit:'+p.id,'Batal',1),home(true))]});}
+      else if(key==='admin_manual_delete_confirm'){const p=model.product(arg);await i.reply({ephemeral:true,content:`Hapus produk **${safe(p.name)}** dari katalog?\nRiwayat pesanan tetap tersimpan. Tagihan QRIS yang sudah dibuat tetap diproses sesuai pesanan.`,allowedMentions:{parse:[]},components:[row(button('admin_manual_delete:'+p.id,'Ya, Hapus Produk',4),button('admin_manual_settings:'+p.id,'Batal',1),home(true))]});}
       else if(key==='admin_manual_delete'){model.remove(user,arg);await i.update(catalog(user,0,true));}
+      else if(key==='admin_manual_settings')await i.update(settingsView(model.product(arg)));
       else if(key==='admin_manual_edit')await i.update(editView(model.product(arg),user,Number(parts[2] || 0)));
       else if(key==='admin_manual_data' || key==='admin_manual_price'){const p=model.product(arg);await i.showModal(key==='admin_manual_data'?modal('admin_manual_data_save:'+p.id,'Ubah Produk',[['name','Nama produk',p.name,80],['description','Deskripsi & waktu proses',p.description,800,true]]):modal('admin_manual_price_save:'+p.id,'Atur Harga Jual',[['price','Harga jual IDR, tanpa titik',p.price,7]]));}
       else if(key==='admin_manual_quantity'){const p=model.product(arg);await i.showModal(modal('admin_manual_quantity_save:'+p.id,'Atur Stok Jual',[['quantity','Jumlah stok jual tersedia (angka)',p.quantity??(p.auto_enabled?model.stockCount(p.id):0),7]]));}
@@ -230,20 +233,20 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
       else if(key==='admin_manual_stock_edit'){const s=model.stock(user,arg);if(s.state!=='available')throw Error('Stok sudah dialokasikan atau terjual.');await i.showModal(modal('admin_manual_stock_save:'+s.product_id+':'+s.id,'Ubah Data Produk',[['body','Akun/kode unik untuk satu pembeli',s.body,1000,true]]));}
       else if(key==='admin_manual_test'){
         const t=model.testPreview(user,arg),p=t.product;
-        await i.reply({ephemeral:true,content:`**🧪 Tes Beli Admin • ${safe(p.name)}**\nHarga jual: ${money(p.price)}\nStok jual: ${t.quantity}\nData siap kirim: ${t.dataCount}\nMetode pembeli: saldo${model.qrisConfigured()&&p.price>=1000?' / QRIS':''}\n\n${t.ready?'Pengiriman otomatis siap diuji. Tekan tombol di bawah untuk mengirim contoh data ke DM Anda.':safe(t.reason)}\n\nIni simulasi: tidak membuat tagihan, memotong saldo, mengurangi stok, atau mencatat pesanan penjualan.`,allowedMentions:{parse:[]},components:[row(button('admin_manual_test_dm:'+p.id,'Kirim Tes ke DM Saya',3).setDisabled(!t.ready),button('admin_manual_detail:'+p.id,'Kembali',1),home(true))]});
+        await i.reply({ephemeral:true,content:`**🧪 Tes Beli Admin • ${safe(p.name)}**\nHarga jual: ${money(p.price)}\nStok jual: ${t.quantity}\nData siap kirim: ${t.dataCount}\nMetode pembeli: saldo${model.qrisConfigured()&&p.price>=1000?' / QRIS':''}\n\n${t.ready?'Pengiriman otomatis siap diuji. Tekan tombol di bawah untuk mengirim contoh data ke DM Anda.':safe(t.reason)}\n\nIni simulasi: tidak membuat tagihan, memotong saldo, mengurangi stok, atau mencatat pesanan penjualan.`,allowedMentions:{parse:[]},components:[row(button('admin_manual_test_dm:'+p.id,'Kirim Tes ke DM Saya',3).setDisabled(!t.ready),button('admin_manual_settings:'+p.id,'Kembali',1),home(true))]});
       }
       else if(key==='admin_manual_test_dm'){
         const t=model.testPreview(user,arg);if(!t.ready)throw Error(t.reason);
         await i.deferReply({ephemeral:true});
         try{
-          await sendDM(user,{content:'🧪 **TES ADMIN — BUKAN PESANAN PENJUALAN**',embeds:[embed('Data Produk • '+t.product.name,`Harga jual: ${money(t.product.price)}\n\n${safe(t.body)}\n\nData ini hanya contoh tes dan tetap tersedia untuk pembeli. Stok dan saldo tidak berubah.`)],allowedMentions:{parse:[]},components:[row(button('admin_manual_detail:'+t.product.id,'Kembali',1),home(true))]});
-          await i.editReply({content:'✅ Contoh Data Produk berhasil dikirim ke DM Anda. Stok dan saldo tetap sama.',components:[row(button('admin_manual_detail:'+t.product.id,'Kembali',1),home(true))]});
+          await sendDM(user,{content:'🧪 **TES ADMIN — BUKAN PESANAN PENJUALAN**',embeds:[embed('Data Produk • '+t.product.name,`Harga jual: ${money(t.product.price)}\n\n${safe(t.body)}\n\nData ini hanya contoh tes dan tetap tersedia untuk pembeli. Stok dan saldo tidak berubah.`)],allowedMentions:{parse:[]},components:[row(button('admin_manual_settings:'+t.product.id,'Kembali',1),home(true))]});
+          await i.editReply({content:'✅ Contoh Data Produk berhasil dikirim ke DM Anda. Stok dan saldo tetap sama.',components:[row(button('admin_manual_settings:'+t.product.id,'Kembali',1),home(true))]});
         }catch{
-          await i.editReply({content:'DM tes tidak terkirim. Aktifkan izin DM dari anggota server, lalu coba lagi. Stok dan saldo tetap sama.',components:[row(button('admin_manual_test:'+t.product.id,'Coba Lagi',1),button('admin_manual_detail:'+t.product.id,'Kembali',1),home(true))]});
+          await i.editReply({content:'DM tes tidak terkirim. Aktifkan izin DM dari anggota server, lalu coba lagi. Stok dan saldo tetap sama.',components:[row(button('admin_manual_test:'+t.product.id,'Coba Lagi',1),button('admin_manual_settings:'+t.product.id,'Kembali',1),home(true))]});
         }
       }
-      else if(key==='admin_manual_auto')await i.update(detail(model.toggleAuto(user,arg),true));
-      else if(key==='admin_manual_toggle'){const p=model.product(arg);await i.update(detail(model.save(user,arg,{...p,enabled:p.enabled?0:1}),true));}
+      else if(key==='admin_manual_auto')await i.update(settingsView(model.toggleAuto(user,arg)));
+      else if(key==='admin_manual_toggle'){const p=model.product(arg);await i.update(settingsView(model.save(user,arg,{...p,enabled:p.enabled?0:1})));}
       else if(key==='admin_manual_preview'){
         const t=model.preview(user,arg);
         await i.reply({ephemeral:true,content:'Pratinjau pribadi admin. Data tetap tersedia; belum ada pesan dikirim ke pembeli.',embeds:[embed('Hasil / keterangan pengiriman',safe(t.body))],allowedMentions:{parse:[]},components:[row(button('admin_manual_delivery_data:'+t.product.id+':0','Kembali',1),home(true))]});
