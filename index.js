@@ -12,6 +12,7 @@ const {
 } = require("discord.js");
 
 const {createBuyerProfiles,configureBuyerProfiles,rememberBuyer}=require("./buyer-profiles");
+const {createLanguages}=require("./languages");
 const {createPremiumProducts,createPremiumProductsHandler}=require("./premium-products");
 const {createManualProducts,createManualProductsHandler}=require("./manual-products");
 const {createBuyerManagement,createBuyerManagementHandler}=require("./buyer-management");
@@ -271,6 +272,7 @@ app.post("/api/discord/balance",admin, (req,res)=>{
 const client = new Client({intents:[GatewayIntentBits.Guilds]});
 const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
 const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
+const languages=createLanguages({db,staff});
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM});
 manualProducts=createManualProducts({db,staff,payments,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
@@ -286,7 +288,8 @@ async function startDiscord(){
   if(!process.env.DISCORD_TOKEN) return console.log("DISCORD_TOKEN belum diisi; bot tidak dijalankan.");
   const commands=[
     new SlashCommandBuilder().setName("shop").setDescription("Buka panel toko OTP"),
-    new SlashCommandBuilder().setName("admin").setDescription("Buka panel admin toko")
+    new SlashCommandBuilder().setName("admin").setDescription("Buka panel admin toko"),
+    new SlashCommandBuilder().setName("ping").setDescription("Cek respons dan koneksi bot (admin)")
   ].map(x=>x.toJSON());
   const rest=new REST({version:"10"}).setToken(process.env.DISCORD_TOKEN);
   if(process.env.DISCORD_CLIENT_ID) await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),{body:commands});
@@ -313,7 +316,8 @@ async function startDiscord(){
       new ButtonBuilder().setCustomId("shop_orders").setLabel("Pesanan").setEmoji("📦").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary)
     ),new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("shop_language:shop").setLabel("Bahasa / Language").setEmoji("🌐").setStyle(ButtonStyle.Primary)
     )];
   }
 
@@ -328,9 +332,9 @@ async function startDiscord(){
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024};},audit:toolkit.audit});
-  const premiumProducts=createPremiumProducts({db,staff,products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
+  const premiumProducts=createPremiumProducts({db,staff,products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));}});
   const handlePremiumProducts=createPremiumProductsHandler({discord:require("discord.js"),model:premiumProducts,products:manualProducts,staff});
-  const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
+  const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));}});
   const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments,premium:premiumProducts});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true,isOwner:id=>staff.isOwner(id)});
@@ -346,8 +350,11 @@ async function startDiscord(){
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
+      languages.attach(i);
       if(await serverAccess.gate(i))return;
       rememberBuyer(i.user);buyerManagement.touch(i.user.id);
+      if(await languages.handle(i,()=>({embeds:[shopEmbed()],components:mainRow()})))return;
+      if(await languages.onboard(i))return;
       addHomeNavigation(i);
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});

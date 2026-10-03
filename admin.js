@@ -47,9 +47,15 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const amount=value=>`${Number(value || 0).toLocaleString('id-ID')} IDR`;
+  function waiting(table,where){if(typeof db.prepare!=='function')return 0;try{if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))return 0;return Number(db.prepare('SELECT COUNT(*) n FROM '+table+' WHERE '+where).get().n)||0;}catch{return 0;}}
+  function queueLabel(id,label){
+    const orders=()=>waiting('manual_product_orders',"state='pending'"),requests=()=>waiting('manual_topup_requests',"status='pending'"),issues=()=>waiting('direct_purchases',"state='review'"),claims=()=>waiting('premium_claims',"state='open'"),tickets=()=>waiting('support_tickets',"status='open'");
+    const readers={'admin_manual_orders:0':orders,'admin_store_requests:0':requests,'admin_payment_issues':issues,'admin_premium_claims:0':claims,'admin_tools_tickets:0':tickets,admin_payment_requests:()=>orders()+requests(),admin_payment_checks:issues,admin_transactions_menu:()=>orders()+requests()+issues(),admin_catalog_menu:claims,admin_balance_menu:tickets};
+    const count=readers[id]?.()||0;return (count?label+' • '+count:label).slice(0,80);
+  }
   function menu(title,description,choices,back='admin_home') {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(title).setDescription(description)],components:[
-      ...Array.from({length:Math.ceil(choices.length/5)},(_,r)=>new ActionRowBuilder().addComponents(...choices.slice(r*5,r*5+5).map(([id,label,style=ButtonStyle.Primary])=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style)))),
+      ...Array.from({length:Math.ceil(choices.length/5)},(_,r)=>new ActionRowBuilder().addComponents(...choices.slice(r*5,r*5+5).map(([id,label,style=ButtonStyle.Primary])=>new ButtonBuilder().setCustomId(id).setLabel(queueLabel(id,label)).setStyle(style)))),
       new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(back).setLabel('Kembali').setStyle(ButtonStyle.Secondary))
     ]};
   }
@@ -106,14 +112,15 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
       .setDescription('Pilih kategori untuk mengelola Hi, Belanja Produk Digital Yukk.')],components:[
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('admin_catalog_menu').setLabel('Toko').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Pembeli').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('admin_transactions_menu').setLabel('Pembayaran').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_catalog_menu').setLabel(queueLabel('admin_catalog_menu','Toko')).setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('admin_balance_menu').setLabel(queueLabel('admin_balance_menu','Pembeli')).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('admin_transactions_menu').setLabel(queueLabel('admin_transactions_menu','Pembayaran')).setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_reports_menu').setLabel('Laporan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Sistem').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('admin_eff_summary').setLabel('Ringkasan').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('shop_language:admin').setLabel('Bahasa / Language').setStyle(ButtonStyle.Primary)
       )]};
   }
   function products(requested=0) {
@@ -133,7 +140,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       new ButtonBuilder().setCustomId(`admin_products:${page-1}`).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
       new ButtonBuilder().setCustomId(`admin_products:${page+1}`).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===total-1),
       new ButtonBuilder().setCustomId('admin_add').setLabel('Tambah').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId('admin_payment_records').setLabel('Kembali').setStyle(ButtonStyle.Primary)
     ));
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('📋 Katalog Lokal')
       .setDescription(rows.length?'Tekan tombol produk untuk mengubah nama, negara, layanan, harga, atau status aktif.':'Belum ada produk lokal.')
@@ -158,15 +165,16 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
   }
   return async function handleAdmin(i) {
     const command=i.isChatInputCommand() && i.commandName==='admin';
-    if(!command && !String(i.customId || '').startsWith('admin_')) return false;
+    const pingCommand=i.isChatInputCommand() && i.commandName==='ping';
+    if(!command && !pingCommand && !String(i.customId || '').startsWith('admin_')) return false;
     if(!isDiscordAdmin(i.user.id)) {
       await i.reply({ephemeral:true,content:'Akses ditolak. ID Discord Anda belum terdaftar sebagai admin toko.'});
       return true;
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(['admin_test_otp','admin_health'].includes(i.customId)&&staff&&!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Hanya owner dapat melihat saldo dan membeli langsung dari provider.'});return true;}
-    if(i.isButton()) {
-      if(i.customId==='admin_bot_ping'){
+    if(pingCommand || i.isButton()) {
+      if(pingCommand || i.customId==='admin_bot_ping'){
         const started=Date.now();await i.deferReply({ephemeral:true});const metrics=measureHealth();
         if(!isDiscordAdmin(i.user.id))throw Error('Akses admin sudah dicabut.');
         const ms=n=>Number.isFinite(n)&&n>=0?n.toFixed(1)+' ms':'Belum tersedia';
@@ -188,7 +196,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         await hydrateBuyers(rows.map(r=>r.discord_id));
         const title=topup?'Riwayat Isi Saldo QRIS':'Riwayat QRIS Beli';
         const content=rows.length?rows.map(r=>topup?`Tagihan: ${r.order_id}\nPembeli: ${buyerLabel(r.discord_id)}\nSaldo: ${amount(r.amount)} • Status: ${r.status}\nSaldo masuk: ${r.credited?'Ya':'Belum'} • ${r.created_at} UTC`:`Tagihan: ${r.invoice_id}\nPembeli: ${buyerLabel(r.discord_id)}\nHarga: ${amount(r.amount)} • Status: ${r.state}\nOrder: ${r.provider_order_id || '-'} • ${r.created_at} UTC`).join('\n\n'):'Belum ada transaksi.';
-        await i.reply({ephemeral:true,content:`**${title} — 5 transaksi terakhir**\n\n${content}`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_home').setLabel('Panel Admin').setStyle(ButtonStyle.Primary))]});return true;
+        await i.reply({ephemeral:true,content:`**${title} — 5 transaksi terakhir**\n\n${content}`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_payment_records').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
       }
       if(i.customId==='admin_balance_add') {
         const modal=new ModalBuilder().setCustomId('admin_balance_save').setTitle('Tambah Saldo Pembeli');
