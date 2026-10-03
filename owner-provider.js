@@ -23,9 +23,9 @@ function createOwnerProviderHandler({discord,staff,commerce,smscode,smsCatalogPr
       }else if(id.startsWith('admin_owner_buy:')){
         const r=await commerce.ownerBuy(i.user.id,id.split(':')[1]);
         if(otpPanel){const p=otpPanel(String(r.order.id),i.user.id);p.content='✅ **Pembelian Owner Berhasil**\nBiaya provider: '+money(r.providerAmount)+'\nSaldo pembeli tidak dipotong.\n\n'+p.content;await i.editReply(p);return true;}
-        await i.editReply({content:`✅ **Pembelian Owner Berhasil**\nOrder: ${r.order.id}\nNomor: ${r.order.phone_number}\nBiaya provider: ${money(r.providerAmount)}\nSaldo pembeli tidak dipotong. Gunakan nomor untuk meminta SMS pada aplikasi yang dipilih; OTP dikirim ke DM Anda.`,components:[row([['check_otp:'+r.order.id,'Cek OTP'],['cancel_order:'+r.order.id,'Batalkan'],['admin_test_otp','Saldo Provider']])]});
+        await i.editReply({content:`✅ **Pembelian Owner Berhasil**\nOrder: ${r.order.id}\nNomor: ${r.order.phone_number}\nBiaya provider: ${money(r.providerAmount)}\nSaldo pembeli tidak dipotong. Gunakan nomor untuk meminta SMS pada aplikasi yang dipilih; OTP dikirim ke DM Anda.`,components:[row([['check_otp:'+r.order.id,'Cek OTP'],['cancel_order:'+r.order.id,'Batalkan'],['admin_health','Saldo Provider']])]});
       }else throw Error('Menu owner tidak dikenali.');
-    }catch(e){await i.editReply({content:e.message,allowedMentions:{parse:[]},components:[row([['admin_test_otp','Kembali ke Provider']])]});}
+    }catch(e){await i.editReply({content:e.message,allowedMentions:{parse:[]},components:[row([['admin_health','Kembali ke Provider']])]});}
     return true;
   };
 }

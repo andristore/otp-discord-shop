@@ -4,7 +4,7 @@ const groups=['products','support','payments'];
 function routeGroup(id){
  id=String(id||'');
  if(/^(admin_premium_(claims|claim_detail|resolve)|admin_manual_(deliver(?:_save|:)|assign|unassign))/.test(id))return 'support';
- if(/^(admin_manual_(catalog|edit|add|new|create|save|stock|delivery|auto|remove|delete|search|change|low|detail|data|preview|price|quantity|settings|test|toggle)|admin_(products|add$|edit$|create$|save:|catalog_manual|catalog_promo|pricing)|admin_tools_coupon|admin_premium_)/.test(id))return 'products';
+ if(/^(admin_manual_(catalog|edit|add|new|create|save|stock|delivery|auto|remove|delete|search|change|low|detail|data|preview|price|quantity|settings|test|toggle)|admin_(products|add$|edit(?::|$)|create$|save:|catalog_manual|catalog_promo|pricing)|admin_tools_coupon|admin_premium_)/.test(id))return 'products';
  if(/^(admin_(balance|topup|direct|payment|transactions)|admin_store_(requests|request:|approve|reject|saveapprove|savereject)|admin_manual_(refund|payment_check)|admin_ops_(issue|attach|refund|resolve)|admin_tools_reconcile|admin_healthcheck_(reconcile|refund|invoice|midtrans|callbacks))/.test(id))return 'payments';
  if(/^(admin_(buyers|ops_buyer|manual_(order|finish|refund)|dm_)|admin_tools_ticket|admin_healthcheck_(overdue|limit|toggle|stock))/.test(id))return 'support';
  if(['admin_catalog_menu','admin_catalog_manual','admin_catalog_promo'].includes(id))return 'products';

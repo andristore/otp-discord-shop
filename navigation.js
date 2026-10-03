@@ -56,7 +56,7 @@ function withHome(payload, requestedHome) {
   }
   rows=rows.filter(row=>row.components.length);
   const ids = new Set(rows.flatMap(row => row.components.map(component => component.custom_id)));
-  if (['shop_products', 'shop_balance', 'shop_orders', 'shop_topup', 'shop_help'].every(id => ids.has(id))) {
+  if (homeId!==ADMIN_HOME_ID && ['shop_products', 'shop_balance', 'shop_orders', 'shop_topup', 'shop_help'].every(id => ids.has(id))) {
     return {...result, components: validateComponents(rows.map(row => ({...row, components: row.components.filter(component => component.custom_id !== HOME_ID)})).filter(row => row.components.length))};
   }
   if (rows.some(row => row.components.some(component => component.custom_id === homeId))) return {...result, components: validateComponents(rows)};
@@ -75,6 +75,12 @@ function withHome(payload, requestedHome) {
   return {...result, components: validateComponents(rows)};
 }
 
+function homeForUser(staff,user){return staff?.isAdmin?.(user)||staff?.isOwner?.(user)?ADMIN_HOME_ID:HOME_ID;}
+async function dispatchInteraction(handler,interaction){
+ const handled=await handler(interaction);
+ if(handled&&!interaction.replied&&!interaction.deferred)await interaction.reply({ephemeral:true,content:'Menu ini sudah berubah atau tidak tersedia. Buka Menu Awal untuk melanjutkan.',allowedMentions:{parse:[]}});
+ return handled;
+}
 function addHomeNavigation(interaction, staff) {
   const homeId = staff?.isAdmin?.(interaction.user?.id) || staff?.isOwner?.(interaction.user?.id) || ['admin','ping'].includes(interaction.commandName) || /^(admin_|provider_)/.test(String(interaction.customId || '')) ? ADMIN_HOME_ID : HOME_ID;
   for (const method of ['reply', 'editReply', 'update', 'followUp']) {
@@ -84,4 +90,4 @@ function addHomeNavigation(interaction, staff) {
   }
 }
 
-module.exports = {HOME_ID, ADMIN_HOME_ID, withHome, addHomeNavigation};
+module.exports = {HOME_ID, ADMIN_HOME_ID, withHome, addHomeNavigation,homeForUser,dispatchInteraction};

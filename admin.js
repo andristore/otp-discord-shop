@@ -87,7 +87,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(id==='admin_system_access')return menu('🔐 Akses Bot','Kelola izin server, channel, role pengguna bot, dan panel toko.',[
       ['admin_ops_server_menu','Server & Channel'],['admin_shop_panel','Panel Toko']], 'admin_system_menu');
     if(id==='admin_system_provider')return menu('📱 Provider & Webhook','Saldo, pembelian owner, tes webhook, dan peringatan provider.',[
-      ['admin_health','Saldo Provider (Owner)'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook (Owner)'],['admin_ops_low','Peringatan Saldo (Owner)']], 'admin_system_menu');
+      ['admin_health','Saldo & Beli OTP (Owner)'],['admin_smscode_webhook_test','Tes Webhook (Owner)'],['admin_ops_low','Peringatan Saldo (Owner)']], 'admin_system_menu');
     if(id==='admin_system_data')return menu('🗂️ Data & Pemeliharaan','Backup data, aktivitas admin, dan status operasional toko.',[
       ['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_store_maintenance','Maintenance'],['admin_bot_ping','Ping & Kecepatan Bot'],['admin_healthcheck','Kesiapan Toko']], 'admin_system_menu');
   }

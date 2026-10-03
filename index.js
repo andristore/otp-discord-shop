@@ -34,7 +34,7 @@ const {createOwnerProviderHandler}=require("./owner-provider");
 const {createSMSCodeWebhook,createSMSCodeWebhookHandler}=require("./smscode-webhook");
 const {createServerAccess,createServerAccessHandler}=require("./server-access");
 const {createStaff,createStaffHandler}=require("./staff");
-const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
+const {HOME_ID,withHome,addHomeNavigation,homeForUser,dispatchInteraction}=require("./navigation");
 const {createShopTools,createShopToolsHandler}=require("./shop-tools");
 const {createEfficiency,createEfficiencyHandler}=require("./efficiency");
 const {createStoreFeatures,createStoreFeatureHandler,REFUND_GUIDE}=require("./store-features");
@@ -369,9 +369,9 @@ async function startDiscord(){
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations,otpPanel:handleOTPLifecycle.panel});
   const measureStorage=createStorageHealth({databasePath,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups"),volumePath:process.env.RAILWAY_VOLUME_MOUNT_PATH,appDir:__dirname});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:async()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024,storage:await measureStorage()};},audit:toolkit.audit});
-  const premiumProducts=createPremiumProducts({db,staff,language:id=>languages.get(id),products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));}});
+  const premiumProducts=createPremiumProducts({db,staff,language:id=>languages.get(id),products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload,homeForUser(staff,id)),id,'delivery'));}});
   const handlePremiumProducts=createPremiumProductsHandler({discord:require("discord.js"),language:id=>languages.get(id),model:premiumProducts,products:manualProducts,staff});
-  const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,language:id=>languages.get(id),sendDM:async(id,payload,order)=>{const send=async()=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));};if(order)await improvements.send("digital",order.id,id,send);else await send();}});
+  const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,language:id=>languages.get(id),sendDM:async(id,payload,order)=>{const send=async()=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload,homeForUser(staff,id)),id,'delivery'));};if(order)await improvements.send("digital",order.id,id,send);else await send();}});
   const handleImprovements=createImprovementsHandler({discord:require("discord.js"),model:improvements,products:manualProducts,operations,staff});
   const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments,premium:premiumProducts,language:id=>languages.get(id)});
   const orderChannel=createOrderChannel({db,staff,resolveChannel:async id=>{const c=await client.channels.fetch(id);if(!c)return null;const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);return {id:c.id,guildId:c.guildId,type:c.type,canReport:!!p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks),send:payload=>c.send(payload)};},send:(c,p)=>c.send(p)});
@@ -387,7 +387,7 @@ async function startDiscord(){
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments,language:id=>languages.get(id),otpPanel:handleOTPLifecycle.panel});
   const handleStoreFeatures=createStoreFeatureHandler({discord:require("discord.js"),features:storeFeatures,staff});
   const handleDigiflazz=createDigiflazzHandler({discord:require("discord.js"),model:digiflazz,getBalance,staff});
-  direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(languages.translate(withHome(handleDirect.status(row)),row.discord_id,'delivery'));});
+  direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(languages.translate(withHome(handleDirect.status(row),homeForUser(staff,row.discord_id)),row.discord_id,'delivery'));});
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
@@ -395,41 +395,41 @@ async function startDiscord(){
       if(await protectOwnerInteraction(i,staff))return;
       if(await serverAccess.gate(i))return;
       rememberBuyer(i.user);buyerManagement.touch(i.user.id);
+      addHomeNavigation(i,staff);
       if(await languages.handle(i,()=>({embeds:[shopEmbed()],components:mainRow()})))return;
       if(await languages.onboard(i))return;
-      addHomeNavigation(i,staff);
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
-        if(i.customId===HOME_ID&&staff.isAdmin(i.user.id))return handleAdmin(i);
+        if(i.customId===HOME_ID&&staff.isAdmin(i.user.id))return dispatchInteraction(handleAdmin,i);
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
-      if(await handleOTPLifecycle(i))return;
-      if(await handleBuyerGameCheck(i))return;
-      if(await handleUpgrades(i))return;
+      if(await dispatchInteraction(handleOTPLifecycle,i))return;
+      if(await dispatchInteraction(handleBuyerGameCheck,i))return;
+      if(await dispatchInteraction(handleUpgrades,i))return;
       if(i.customId==='admin_balance_save'&&!staff.isOwner(i.user.id)&&upgrades.settings().approvalThreshold>0&&Number(i.fields.getTextInputValue('amount'))>=upgrades.settings().approvalThreshold){await i.deferReply({ephemeral:true});const p=await upgrades.requestCredit(i);await i.editReply({content:'Pengajuan '+p.id+' menunggu owner di Dashboard Owner → Pengajuan Saldo. Saldo belum ditambahkan.',allowedMentions:{parse:[]}});return;}
-      if(await handleHealth(i))return;
-      if(await handleOrderChannel(i))return;
-      if(await handleImprovements(i))return;
-      if(await handleStoreFeatures(i))return;
-      if(await handleDigiflazz(i))return;
+      if(await dispatchInteraction(handleHealth,i))return;
+      if(await dispatchInteraction(handleOrderChannel,i))return;
+      if(await dispatchInteraction(handleImprovements,i))return;
+      if(await dispatchInteraction(handleStoreFeatures,i))return;
+      if(await dispatchInteraction(handleDigiflazz,i))return;
       if(storeFeatures.maintenance() && /^(shop_products|shop_games|df_|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:|tool_coupon)/.test(String(i.customId || ''))){
         return i.reply({ephemeral:true,content:'🔧 Toko sedang maintenance. Pembelian baru dihentikan sementara. Pesanan, OTP, dan tagihan sebelumnya tetap tersedia.'});
       }
-      if(await handleTools(i))return;
-      if(await handlePremiumProducts(i))return;
-      if(await handleOrderHistory(i))return;
-      if(await handleEfficiency(i))return;
-      if(await handleStaff(i))return;
-      if(await handleServerAccess(i))return;
-      if(await handleOwnerProvider(i))return;
-      if(await handleSMSWebhook(i))return;
-      if(await handleOperations(i)) return;
-      if(await handleManualProducts(i)) return;
-      if(await handleBuyerManagement(i))return;
-      if(await handleAdmin(i)) return;
-      if(await handleProviderFlow(i)) return;
-      if(await handlePayment(i)) return;
-      if(await handleDirect(i)) return;
-      if(await handleFlow(i)) return;
+      if(await dispatchInteraction(handleTools,i))return;
+      if(await dispatchInteraction(handlePremiumProducts,i))return;
+      if(await dispatchInteraction(handleOrderHistory,i))return;
+      if(await dispatchInteraction(handleEfficiency,i))return;
+      if(await dispatchInteraction(handleStaff,i))return;
+      if(await dispatchInteraction(handleServerAccess,i))return;
+      if(await dispatchInteraction(handleOwnerProvider,i))return;
+      if(await dispatchInteraction(handleSMSWebhook,i))return;
+      if(await dispatchInteraction(handleOperations,i)) return;
+      if(await dispatchInteraction(handleManualProducts,i)) return;
+      if(await dispatchInteraction(handleBuyerManagement,i))return;
+      if(await dispatchInteraction(handleAdmin,i)) return;
+      if(await dispatchInteraction(handleProviderFlow,i)) return;
+      if(await dispatchInteraction(handlePayment,i)) return;
+      if(await dispatchInteraction(handleDirect,i)) return;
+      if(await dispatchInteraction(handleFlow,i)) return;
 
       if(i.isChatInputCommand() && i.commandName==="shop"){
         return i.reply({embeds:[shopEmbed()],components:mainRow()});
@@ -512,6 +512,7 @@ async function startDiscord(){
           components:[confirm,new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('favorite_save:'+quote.token).setLabel('Simpan Favorit').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('tool_coupon:'+quote.token).setLabel('Gunakan Voucher').setStyle(ButtonStyle.Primary))]
         });
       }
+      if(!i.replied&&!i.deferred)await i.reply({ephemeral:true,content:'Menu ini sudah berubah atau tidak tersedia. Buka Menu Awal untuk melanjutkan.',allowedMentions:{parse:[]}});
     } catch(e){
       diagnostics.record("interaction","FAILED",i.id);
       console.error("Interaksi Discord gagal; referensi",i.id,"kode",Number.isInteger(e.code)?e.code:"tidak diketahui");
