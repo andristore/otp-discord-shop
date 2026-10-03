@@ -1,3 +1,69 @@
+## Penguatan Midtrans — pembaruan terbaru
+
+**Ganti 6 file kode jika paket sebelumnya sudah terpasang:** midtrans.js, payments.js, shop-health.js, shop-tools.js, manual-products.js, direct-payments.js. Panduan README.md dan CARA_PASANG.txt juga diperbarui. Paket tetap 55 file: 27 runtime, 25 tes, dan 3 panduan/konfigurasi. Tidak ada dependency tambahan. Kolom database dan tabel diagnostik ditambahkan otomatis tanpa menghapus data lama.
+
+- `/admin → Pembayaran → Pemeriksaan → Pencocokan Catatan → Midtrans`: mode, acquirer, ketersediaan key, waktu/kode API terakhir, callback bertanda tangan terakhir, dan Tes Invoice. Tidak ada kategori utama pembayaran baru. Masukkan ID invoice Midtrans yang sudah dibuat bot; tes hanya membaca API dan mencocokkan identitas/nominal/mode, tidak menambah saldo atau mengirim produk. Gunakan Cek Pembayaran pada invoice untuk memproses hasil settlement.
+- Penolakan charge pasti (kode validasi/izin yang dikenal, tanpa transaction_id dan bukan HTTP 5xx) mengubah reservasi menjadi failure. Timeout, respons rusak, duplikasi order ID 406, 404, 429, dan server error tetap terkunci untuk diperiksa; jangan membuat pembayaran pengganti sebelum status jelas.
+- `expiry_time` valid dari API charge/status tersimpan menggunakan WIB. Pengingat QRIS yang sudah ada otomatis mencakup Midtrans dengan tenggat tersebut. Jika provider tidak memberikan expiry, bot tidak mengarang batas. Reminder selalu mengecek ulang status sebelum mengirim.
+- Refund/partial_refund dari API terverifikasi dicatat terpisah dari ledger toko. Nominal refund disimpan hanya jika integer IDR valid dan tidak melebihi tagihan. Refund tetap ditandai meski respons berikutnya stale settlement/pending; tidak mengkredit saldo atau memicu fulfillment ulang. Status/refund sebelum pembaruan ini baru diketahui setelah callback atau pemeriksaan ulang invoice.
+- Refund eksternal juga menghalangi pesanan QRIS yang belum diproses mulai mengirim Data Produk atau membeli OTP provider, meski penanda pembayaran lokal sudah credited. Stok yang dialokasikan tetap menunggu pemeriksaan admin; tidak otomatis dijual ulang. Cek Pembayaran memberitahu pembeli agar menghubungi admin untuk pencocokan.
+- Pencocokan Catatan menampilkan refund eksternal dan pembuatan invoice Midtrans yang belum pasti. Laporan/CSV menampilkan jumlah invoice refund eksternal dari **semua periode**, terpisah dari net dan refund toko. Penanda ini tetap tersedia untuk audit, bukan daftar tugas dengan tombol selesai. Admin perlu mencocokkan mutasi Midtrans dan ledger; tidak ada debit saldo, refund, atau koreksi laba otomatis. Biaya merchant tetap belum diketahui sampai nilai aktual dicatat melalui fitur yang sudah ada.
+- Diagnostik mencatat kode/waktu tanpa Server Key atau secret. Callback tetap memverifikasi signature dan mengambil status langsung dari API; payload webhook tidak langsung mengkredit saldo. Callback invalid/tidak dikenal tidak menjadi bukti callback sukses.
+
+**333 tes lokal lulus dan 27 modul runtime lolos pemeriksaan sintaks.** Meliputi penolakan/timeout, refund, expiry, replay webhook, hak admin, menu ID unik, reminder, laporan, serta regresi fitur toko. Ini belum memverifikasi akun Midtrans/Discord/Railway pengguna.
+
+### Mengaktifkan Midtrans di Railway
+
+Variables yang sudah didukung: `PAYMENT_GATEWAY=midtrans`, `MIDTRANS_SERVER_KEY=<Server Key sesuai mode>`, `MIDTRANS_IS_PRODUCTION=false` untuk Sandbox atau `true` untuk produksi, `MIDTRANS_QRIS_ACQUIRER=gopay` atau `airpay shopee` sesuai akun. Isi rahasia melalui Railway Variables, jangan unggah ke GitHub.
+
+Pada dashboard Midtrans, Payment Notification URL harus menunjuk ke **domain HTTPS publik bot yang sebenarnya** ditambah `/api/payments/midtrans/callback`. Contoh pola: `https://DOMAIN-PUBLIK-BOT/api/payments/midtrans/callback`; DOMAIN-PUBLIK-BOT wajib diganti, bukan alamat contoh yang boleh disimpan. Pastikan layanan HTTP bot sudah memiliki public domain. Status key tersedia/hasil tes GET invoice tidak membuktikan seluruh alur QRIS aktif; lakukan transaksi Sandbox, cek callback, lalu pastikan saldo atau satu produk terkirim tepat sekali. Saat pindah mode, invoice lama tetap diperiksa menggunakan mode yang cocok; jangan membayar ulang invoice yang belum pasti.
+
+Referensi resmi: https://docs.midtrans.com/reference/status-code-4xx ; https://docs.midtrans.com/reference/get-transaction-status ; https://docs.midtrans.com/reference/deployment ; https://docs.midtrans.com/docs/https-notification-webhooks
+
+Bagian di bawah adalah catatan pembaruan sebelumnya; daftar 6 file di atas berlaku untuk pembaruan Midtrans ini.
+
+---
+
+## Perbaikan error detail klaim garansi — pembaruan terbaru
+
+**Ganti premium-products.js jika ZIP sebelumnya sudah terpasang.** README.md dan CARA_PASANG.txt diperbarui sebagai panduan. Tidak ada dependency, Variables, atau file kode baru.
+
+Error yang direproduksi: isi kendala sampai 1.000 karakter dengan banyak simbol Markdown dapat menjadi lebih dari 2.000 karakter setelah pengamanan teks, sehingga detail klaim ditolak Discord. Isi kendala kini ditampilkan dalam embed terpisah; header tetap singkat. Teks lengkap dan jawaban admin tetap tersedia, database tidak dipotong, saldo/stok tidak berubah. Bahasa detail klaim untuk admin mengikuti bahasa admin yang membuka menu.
+
+**319 tes lokal lulus dan 27 modul runtime lolos pemeriksaan sintaks.** Tes baru memastikan kendala panjang tetap utuh dan detail pembeli/admin tidak melewati batas content Discord. Pemeriksaan lokal tidak memverifikasi koneksi, kredensial, konfigurasi maupun hasil webhook pada akun Discord/Railway/provider pengguna. Setelah deploy, buka /admin atau /shop baru; pesan sebelumnya tidak otomatis berubah.
+
+---
+
+## Warna submenu dan pilihan — pembaruan terbaru
+
+**Ganti navigation.js saja jika paket audit sebelumnya sudah terpasang.** README.md dan CARA_PASANG.txt diperbarui sebagai panduan. Jika seluruh pembaruan sebelumnya belum diunggah, gunakan 13 file pada bagian operasional ditambah navigation.js: total 14 file kode yang berubah dalam rangkaian ini. Paket tetap 55 file; tidak ada dependency atau Variables baru.
+
+- Biru: kategori, submenu, pencarian, filter, pergantian halaman, Kembali, Menu Awal, serta pengaturan. Pengguna Bot, Daftar Saldo, dan Cari Pembeli sekarang biru untuk membedakannya dari akun pembeli.
+- Abu-abu: pilihan produk/provider, varian, akun pembeli, Data Produk, catatan perubahan, riwayat/invoice, pesanan, favorit, tiket, pengajuan manual, dan catatan biaya gateway.
+- Hijau: tindakan yang sebelumnya ditandai Success, termasuk pembayaran/cek pembayaran dan persetujuan saldo. Tombol invoice pada daftar tagihan tetap abu-abu; tombol aksi cek pembayaran tetap hijau.
+- Merah: hapus, refund, penolakan, pencabutan, serta pembatalan transaksi. Tombol Batal/Cancel untuk kembali dari pratinjau tetap biru; aksi membatalkan pesanan tetap merah.
+
+Tombol Kembali/Back pada rute detail tetap biru. Nama atau ID invoice yang mengandung kata cancel tidak mengubah pilihan data menjadi merah. Pengaturan warna tidak mengubah custom_id, izin, saldo, stok, URL, atau status disabled. Tombol disabled tetap redup/tidak dapat ditekan; tombol tautan memakai gaya link Discord. Perubahan terlihat pada respons menu baru setelah deploy, bukan pesan lama yang sudah terkirim.
+
+**318 tes lokal lulus**, termasuk konsistensi warna, bahasa Indonesia/Inggris, status disabled/link, ID unik, dan regresi transaksi. Belum diuji langsung pada akun Discord/Railway pengguna.
+
+---
+
+## Audit duplikasi dan error — pembaruan terbaru
+
+**Jika ZIP sebelumnya sudah terpasang, ganti 4 file:** store-features.js, shop-tools.js, payments.js, direct-payments.js. Perbarui README.md dan CARA_PASANG.txt untuk panduan. Jika pembaruan sebelumnya belum diunggah, gunakan daftar 13 file pada bagian berikutnya; empat file audit ini sudah termasuk di dalamnya. Paket tetap 55 file, tanpa dependency atau Variables tambahan.
+
+Temuan dan perbaikan:
+1. Laporan lama di store-features menghitung OTP sendiri, berbeda dari laporan utama gabungan. Perhitungan lama dihapus; tombol laporan lama mengarahkan ke Hari Ini/Bulan Ini pada laporan utama. Data penjualan dan ledger tidak dihapus.
+2. Antrean channel informasi yang penuh dapat menggagalkan perubahan maintenance. Sekarang perubahan maintenance tetap tersimpan. Jika antrean penuh, informasi maintenance lama yang masih menunggu dapat diganti; jika semua antrean pengumuman, status maintenance terbaru ditunda sampai tersedia ruang. Pengumuman umum tidak dibuang untuk memberi ruang. Saat beberapa perubahan terjadi selama antrean penuh, yang dikirim kemudian adalah status maintenance terbaru, bukan semua transisi lama.
+3. Kegagalan membersihkan backup lama dapat membuat backup baru yang sudah tersimpan ikut terhapus. Commit pengaturan/hasil verifikasi sekarang dipisahkan dari housekeeping; file baru tetap ada dan menu menampilkan peringatan pembersihan. Kandidat yang gagal verifikasi tetap tidak menggantikan backup sebelumnya.
+4. Invoice pembelian yang belum terverifikasi dapat menjanjikan saldo akan ditambahkan. Sekarang menjelaskan pesanan akan diproses setelah verifikasi; topup tetap memakai keterangan saldo.
+5. Status TriPay EXPIRED/FAILED dan variasi expired/canceled/failed dikenali sebagai tagihan nonaktif pada pemeriksaan pembelian QRIS.
+
+**314 tes lokal lulus; semua 27 modul runtime lolos pemeriksaan sintaks.** Regresi mencakup duplikasi ID komponen, akses admin/owner, alur pembayaran, pengiriman DM, pencarian, backup, dan pengumuman. Tidak ditemukan bentrok ID pada kasus yang diuji; pengaman komponen tetap memeriksa ID unik serta batas Discord sebelum pengiriman. Pemeriksaan kode/tes tidak membuktikan semua kondisi eksternal bebas error. Discord, Railway, kredensial, koneksi dan webhook provider pengguna belum diuji langsung. Setelah deploy, uji menu baru dan jalankan Tes Channel/Tes DM dari akun admin. Pesan lama dapat memakai tampilan lama; buka /admin baru.
+
+---
+
 ## Status transaksi dan pemeriksaan operasional — pembaruan terbaru
 
 **13 file runtime berubah dari paket sebelumnya:** index.js, payments.js, direct-payments.js, operations.js, shop-tools.js, manual-products.js, order-history.js, premium-products.js, languages.js, shop-improvements.js, shop-health.js, web-security.js, store-features.js. Jika paket sebelumnya sudah terpasang, unggah 13 file ini. Jika belum, gunakan seluruh 27 modul runtime. Paket tetap 55 file: 27 runtime, 25 tes, README.md, CARA_PASANG.txt, .env.example. Tidak ada dependency atau Variables baru. Pertahankan package.json, database, dan volume; jangan mengunggah database produksi atau rahasia ke GitHub.

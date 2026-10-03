@@ -30,6 +30,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     const trusted=payments.get(payment.order_id,payment.discord_id);
     const row=get(payment.order_id,payment.discord_id);
     if(!row || !trusted?.credited || trusted.purpose!=='purchase' || trusted.amount!==row.amount)throw new Error('Pembayaran pembelian belum terverifikasi.');
+    if(row.state==='pending'&&['refund','partial_refund'].includes(trusted.provider_status))throw new Error('Refund gateway terdeteksi. Hubungi admin untuk pencocokan pembayaran; pembelian provider belum diproses.');
     if(row.state!=='pending'){await notify(row);return row;}
     const claim=db.prepare("UPDATE direct_purchases SET state='processing' WHERE invoice_id=? AND state='pending'").run(row.invoice_id);
     if(!claim.changes)return get(row.invoice_id,row.discord_id);

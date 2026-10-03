@@ -35,7 +35,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
   if(!['QRIS','QRISC','QRIS2','QRIS_SHOPEEPAY'].includes(channel))throw new Error('TRIPAY_QRIS_CHANNEL tidak didukung. Gunakan kode channel QRIS aktif di akun TriPay.');
   db.exec(`CREATE TABLE IF NOT EXISTS topups(order_id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
   const columns=new Set(db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name));
-  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT',expires_ms:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
+  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT',expires_ms:'INTEGER',provider_status:'TEXT',external_refund_amount:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
   async function request(path,body,live=production) {
     try{
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
@@ -80,7 +80,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
   const active=userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND gateway IN ('tripay','midtrans') AND credited=0 AND status IN ('creating','pending') ORDER BY created_at,rowid LIMIT 1").get(userId);
   function assertCanCreate(userId){const p=active(userId);if(p){const e=new Error('Masih ada tagihan QRIS aktif. Buka Tagihan Aktif untuk melanjutkan pembayaran; jangan membayar ulang.');e.code='ACTIVE_INVOICE';throw e;}}
   const reserve=db.transaction((orderId,userId,amount,purpose,expiry)=>{assertCanCreate(userId);db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production,expires_ms) VALUES(?,?,?,?,'tripay',?,?,?)").run(orderId,userId,amount,purpose,channel,production?1:0,expiry);});
-  const midtrans=require('./midtrans').createMidtrans({db,fetchImpl,env,onSettled,assertCanCreate});
+  const midtrans=require('./midtrans').createMidtrans({db,fetchImpl,env,onSettled,assertCanCreate,diagnostics});
   async function create(userId,amount,options={}) {
     if(gateway==='midtrans')return midtrans.create(userId,amount,options);
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
@@ -109,7 +109,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
       catch {res.status(502).json({success:false,message:'Konfirmasi TriPay belum tersedia; ulangi callback'});}
     });
   }
-  return {create,refresh,mount,gateway,configured:gateway==='midtrans'?midtrans.configured:configured,production:gateway==='midtrans'?midtrans.production:production,canPoll:configured || midtrans.configured,active,assertCanCreate,
+  return {create,refresh,mount,gateway,midtransHealth:midtrans.health,inspectMidtrans:midtrans.inspect,configured:gateway==='midtrans'?midtrans.configured:configured,production:gateway==='midtrans'?midtrans.production:production,canPoll:configured || midtrans.configured,active,assertCanCreate,
     get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
     recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5").all(userId)};
 }
@@ -156,6 +156,7 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
         ]:[]});
       } else if(id.startsWith('topup_check:')) {
         const p=await payments.refresh(id.slice('topup_check:'.length),i.user.id);
+        if(['refund','partial_refund'].includes(p.provider_status)){await i.editReply({content:t(i.user.id,'Refund gateway terdeteksi. Hubungi admin untuk mencocokkan invoice dan saldo/pesanan; jangan membayar ulang.','A gateway refund was detected. Contact an admin to reconcile this invoice and your balance/order; do not pay again.')});return true;}
         await i.editReply({content:p.credited?(p.purpose==='purchase'?t(i.user.id,'✅ Pembayaran pembelian terverifikasi. Lihat pengiriman di Pesanan → Riwayat Pesanan.','✅ Purchase payment verified. Check delivery in Orders → Order History.'):`${t(i.user.id,'✅ Pembayaran diterima. ','✅ Payment received. ')}${money(p.amount)}${t(i.user.id,' sudah masuk ke saldo Anda.',' has been added to your balance.')}`):`${t(i.user.id,'Status pembayaran: ','Payment status: ')}${p.status}. ${(p.purpose==='purchase'?t(i.user.id,'Pesanan diproses setelah pembayaran terkonfirmasi. Jangan membayar ulang.','Your order is processed after payment verification. Do not pay again.'):t(i.user.id,'Saldo ditambahkan setelah pembayaran terkonfirmasi.','Balance is credited after payment verification.'))}`});
       } else {
         const p=await payments.create(i.user.id,parseTopup(i.fields.getTextInputValue('amount')),{email:i.fields.getTextInputValue('email'),name:i.user.username});
