@@ -21,7 +21,8 @@ const {createPricing}=require("./pricing");
 const {createCommerce}=require("./commerce");
 const {createDirectPayments,createDirectHandler}=require("./direct-payments");
 const {createOperations,createOperationsHandler}=require("./operations");
-const {createSMSCodeWebhook}=require("./smscode-webhook");
+const {createOwnerProviderHandler}=require("./owner-provider");
+const {createSMSCodeWebhook,createSMSCodeWebhookHandler}=require("./smscode-webhook");
 const {createServerAccess,createServerAccessHandler}=require("./server-access");
 const {createStaff,createStaffHandler}=require("./staff");
 const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
@@ -267,7 +268,7 @@ app.post("/api/discord/balance",admin, (req,res)=>{
 
 const client = new Client({intents:[GatewayIntentBits.Guilds]});
 const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
-const staff=createStaff({db});configureAdminAccess(staff);
+const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM});
 manualProducts=createManualProducts({db,staff,payments,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
@@ -321,13 +322,15 @@ async function startDiscord(){
   commerce.setCoupons(toolkit.coupons);
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
-  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,resolveUser:id=>client.users.fetch(id),audit:toolkit.audit});
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),audit:toolkit.audit});
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
   const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
-  const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true});
+  const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true,isOwner:id=>staff.isOwner(id)});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
   const handleStaff=createStaffHandler({discord:require("discord.js"),staff,resolveUser:id=>client.users.fetch(id)});
+  const handleOwnerProvider=createOwnerProviderHandler({discord:require("discord.js"),staff,commerce,smscode,smsCatalogProducts});
+  const handleSMSWebhook=createSMSCodeWebhookHandler({staff});
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess,resolveChannel:id=>client.channels.fetch(id),resolveRole:async(guildId,roleId)=>(await client.guilds.fetch(guildId)).roles.fetch(roleId)});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments});
@@ -351,6 +354,8 @@ async function startDiscord(){
       if(await handleEfficiency(i))return;
       if(await handleStaff(i))return;
       if(await handleServerAccess(i))return;
+      if(await handleOwnerProvider(i))return;
+      if(await handleSMSWebhook(i))return;
       if(await handleOperations(i)) return;
       if(await handleManualProducts(i)) return;
       if(await handleAdmin(i)) return;

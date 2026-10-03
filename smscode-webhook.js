@@ -51,8 +51,33 @@ async function configureSMSCodeWebhook({env=process.env,fetchImpl=fetch}={}){
   const result=await tested.json();if(!tested.ok||result.success!==true||Number(result.data?.status_code)!==200)throw Error('Konfigurasi tersimpan, tetapi tes webhook belum mendapat HTTP 200. Periksa domain, deployment, dan secret Railway.');
   return {status:200};
 }
+async function testSMSCodeWebhook({env=process.env,fetchImpl=fetch}={}){
+  if(!env.SMSCODE_API_TOKEN||!env.SMSCODE_WEBHOOK_URL||!env.SMSCODE_WEBHOOK_SECRET)throw Error('Lengkapi SMSCODE_API_TOKEN, SMSCODE_WEBHOOK_URL, dan SMSCODE_WEBHOOK_SECRET di Railway.');
+  const base=(env.SMSCODE_API_BASE_URL||'https://api.smscode.gg/v1').replace(/\/$/,''),headers={Authorization:'Bearer '+env.SMSCODE_API_TOKEN};
+  let config;
+  try{const res=await fetchImpl(base+'/webhook',{headers,signal:AbortSignal.timeout(15000)});config=await res.json();if(!res.ok||config.success!==true)throw Error();}catch{throw Error('Tidak dapat membaca konfigurasi webhook SMSCode. Periksa API token dan koneksi provider.');}
+  if(config.data?.webhook_url!==env.SMSCODE_WEBHOOK_URL)throw Error('URL webhook SMSCode belum sesuai Railway. Jalankan node smscode-webhook.js di Console Railway untuk mendaftarkannya.');
+  if(config.data?.webhook_secret!==env.SMSCODE_WEBHOOK_SECRET)throw Error('Secret webhook SMSCode belum sesuai Railway. Jalankan node smscode-webhook.js di Console Railway untuk menyamakan konfigurasi.');
+  let result;
+  try{const res=await fetchImpl(base+'/webhook/test',{method:'POST',headers,signal:AbortSignal.timeout(15000)});result=await res.json();if(!res.ok||result.success!==true)throw Error();}catch{throw Error('SMSCode belum dapat menjalankan tes webhook. Periksa koneksi/API token atau tunggu sebelum mencoba ulang.');}
+  const status=Number(result.data?.status_code);
+  if(status!==200)throw Error(`Tes webhook belum berhasil (HTTP ${Number.isInteger(status)&&status>=100&&status<=599?status:'tidak diketahui'}). Periksa domain publik HTTPS, deployment, dan secret Railway.`);
+  return {status:200};
+}
+function createSMSCodeWebhookHandler({staff,runTest=()=>testSMSCodeWebhook(),now=()=>Date.now()}){
+  let busy=false,last=-Infinity;
+  return async i=>{
+    if(i.customId!=='admin_smscode_webhook_test')return false;
+    if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak. Tes webhook hanya untuk admin toko.'});return true;}
+    if(busy||now()-last<60000){await i.reply({ephemeral:true,content:'Tes sedang berjalan atau baru dilakukan. Tunggu 60 detik sebelum mencoba lagi.'});return true;}
+    await i.deferReply({ephemeral:true});busy=true;last=now();
+    try{await runTest();await i.editReply({content:'✅ Tes Webhook SMSCode berhasil — HTTP 200. URL dan secret sesuai konfigurasi Railway. Tes ini tidak membeli nomor, mengubah saldo, atau mengirim OTP palsu. Untuk menguji pengiriman OTP ke pembeli, gunakan pesanan OTP sungguhan.'});}
+    catch(e){await i.editReply({content:'❌ '+e.message});}finally{busy=false;}
+    return true;
+  };
+}
 if(require.main===module){
   require('dotenv').config();
   configureSMSCodeWebhook().then(()=>console.log('Webhook SMSCode tersimpan dan tes HTTP 200 berhasil.')).catch(e=>{console.error(e.message);process.exitCode=1;});
 }
-module.exports={createSMSCodeWebhook,verifySignature,configureSMSCodeWebhook};
+module.exports={createSMSCodeWebhook,verifySignature,configureSMSCodeWebhook,testSMSCodeWebhook,createSMSCodeWebhookHandler};

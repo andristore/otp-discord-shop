@@ -42,7 +42,7 @@ function createManualBalance(db) {
   });
 }
 
-function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>{}}) {
+function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audit=()=>{}}) {
   let creditBalance;
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
@@ -69,7 +69,7 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
       ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway']]);
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Akses, backup, dan pemantauan toko.',[
-      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Koneksi Provider'],['admin_ops_low','Peringatan Saldo Provider']]);
+      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Saldo Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook SMSCode'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_ops_low','Peringatan Saldo Provider']]);
   }
   async function buyerBalances(requested=0) {
     const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();
@@ -148,7 +148,11 @@ function createAdminHandler({discord, db, smscode,pricing,resolveUser,audit=()=>
       return true;
     }
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
+    if(['admin_test_otp','admin_health'].includes(i.customId)&&staff&&!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Hanya owner dapat melihat saldo dan membeli langsung dari provider.'});return true;}
     if(i.isButton()) {
+      if(i.customId==='admin_test_otp'){
+        await i.reply({ephemeral:true,content:'**Tes Pembelian OTP — Admin**\n\nTes menggunakan nomor SMSCode sungguhan. Pilih aplikasi, negara, operator, dan produk; harga ditampilkan sebelum Anda mengonfirmasi pembayaran.\n\nPembayaran memakai saldo akun admin atau QRIS yang tersedia. Saldo provider SMSCode juga harus cukup. Menekan Mulai Tes belum membeli nomor.\n\nSetelah order berhasil, gunakan nomor pada layanan yang dipilih untuk meminta SMS. Bot akan memperbarui status/OTP melalui webhook atau polling cadangan, lalu mengirim OTP ke DM akun admin yang membeli.\n\nOrder tetap tercatat di Riwayat OTP dan Riwayat Pesanan. Ini bukan transaksi gratis/simulasi; aturan pembatalan dan refund biasa tetap berlaku.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_products').setLabel('Mulai Tes Pembelian OTP').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
+      }
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(await buyerBalances(Number(i.customId.split(':')[1])));return true;
       }

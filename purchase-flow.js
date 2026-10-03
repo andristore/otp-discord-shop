@@ -31,7 +31,7 @@ function flowOptions(stage, state, catalog) {
   throw new Error('Tahap pembelian tidak valid.');
 }
 
-function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminView=false,resolveFavorite}) {
+function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminView=false,resolveFavorite,isOwner=()=>false}) {
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const searches=new Map();
   const searchKey=(user,stage,state)=>`${user}:${stage}:${state.app || '-'}`;
@@ -116,7 +116,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
       const data=await catalog('product',{app,country,operator});const p=data.products.find(p=>String(p.id)===pid && (p.operator_id==null?'any':String(p.operator_id))===(operator || 'any'));
       if(!p){await i.editReply({content:'Produk tidak tersedia lagi.'});return true;}
       await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`Katalog Provider • ${String(p.name || p.id).slice(0,180)}`)
-        .setDescription(`Harga dasar: **${p.providerPrice.toLocaleString('id-ID')} IDR**\nHarga jual: **${p.price.toLocaleString('id-ID')} IDR**\nSelisih: **${(p.price-p.providerPrice).toLocaleString('id-ID')} IDR**\nStok: **${p.available || 0}**\nStatus: **${p.active?'Aktif':'Nonaktif'}**`)],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual Semua Layanan').setStyle(ButtonStyle.Primary))]});return true;
+        .setDescription(`Harga dasar: **${p.providerPrice.toLocaleString('id-ID')} IDR**\nHarga jual: **${p.price.toLocaleString('id-ID')} IDR**\nSelisih: **${(p.price-p.providerPrice).toLocaleString('id-ID')} IDR**\nStok: **${p.available || 0}**\nStatus: **${p.active?'Aktif':'Nonaktif'}**`)],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual Semua Layanan').setStyle(ButtonStyle.Primary),...(isOwner(i.user.id)?[new ButtonBuilder().setCustomId(`admin_owner_quote:${pid}:${app}:${country}:${operator || 'any'}`).setLabel('Beli Pakai Saldo Provider (Owner)').setStyle(ButtonStyle.Success)]:[]))]});return true;
     }
     if(!adminView && originalId.startsWith('favorite_open:')){
       await i.deferReply({ephemeral:true});

@@ -65,7 +65,7 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
       if(b==null || !Number.isSafeInteger(balance) || balance<0)throw new Error('Saldo provider tidak valid.');
       if(balance>=s.lowThreshold){write('low_notified','');return;}
       const notified=new Set(read('low_notified','').split(',').filter(Boolean));
-      const admins=staff?staff.ids():[...new Set((env.ADMIN_DISCORD_IDS || '').split(',').map(x=>x.trim()).filter(x=>/^\d{17,20}$/.test(x)))];
+      const admins=staff?staff.ids().filter(id=>staff.isOwner(id)):[...new Set((env.ADMIN_DISCORD_IDS || '').split(',').map(x=>x.trim()).filter(x=>/^\d{17,20}$/.test(x)))];
       for(const id of admins)if(!notified.has(id)) {
         try{await sendDM(id,`⚠️ Hi, Belanja Produk Digital Yukk — saldo SMSCode menipis\nSaldo: ${balance.toLocaleString('id-ID')} IDR\nBatas peringatan: ${s.lowThreshold.toLocaleString('id-ID')} IDR\nIsi saldo provider agar pesanan dapat diproses.`);notified.add(id);write('low_notified',[...notified].join(','));}catch{}
       }
