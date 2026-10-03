@@ -301,7 +301,7 @@ async function startDiscord(){
       .setColor(0x5865F2)
       .setTitle(`🛍️ ${title}`)
       .setDescription("Selamat datang di Produk Digital by Maboyy")
-      .setFooter({text:"since 2020 • Andri Store"});
+      .setFooter({text:"est. 2020 — Bot Otomatis 24/7"});
   }
 
   function mainRow(){
