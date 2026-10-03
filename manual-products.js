@@ -5,7 +5,7 @@ const {buyerLabel}=require('./buyer-profiles');
 const money=n=>`${Number(n).toLocaleString('id-ID')} IDR`;
 const safe=s=>String(s || '').replace(/([\\`*_~|<>\[\]])/g,'\\$1');
 
-function createManualProducts({diagnostics,db,staff,audit=()=>{},maintenance=()=>false,payments,sendAdminDM,now=Date.now}) {
+function createManualProducts({diagnostics,db,staff,audit=()=>{},maintenance=()=>false,payments,sendAdminDM,now=Date.now,checkPurchase=()=>{}}) {
   db.exec(`CREATE TABLE IF NOT EXISTS manual_products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,description TEXT NOT NULL,
     price INTEGER NOT NULL,enabled INTEGER NOT NULL DEFAULT 1);
@@ -146,7 +146,7 @@ function createManualProducts({diagnostics,db,staff,audit=()=>{},maintenance=()=
   const buy=db.transaction((user,token)=>{
     const previous=db.prepare('SELECT * FROM manual_product_orders WHERE id=?').get(token);
     if(previous){if(previous.discord_id!==user)throw Error('Pesanan tidak ditemukan.');if(previous.payment_method!=='balance')throw Error('Pesanan memakai QRIS. Buka Pesanan Manual untuk melanjutkan tagihan.');return previous;}
-    const q=checkout(user,token);
+    const q=checkout(user,token);checkPurchase('digital',user,q.amount);
     if(!db.prepare('UPDATE users SET balance=balance-? WHERE discord_id=? AND balance>=?').run(q.amount,user,q.amount).changes)throw Error('Saldo tidak cukup. Isi saldo dahulu.');
     db.prepare('INSERT INTO manual_product_orders(id,discord_id,product_id,product_name,description,amount,automatic,cost_snapshot) VALUES(?,?,?,?,?,?,?,?)').run(token,user,q.product_id,q.product_name,q.description,q.amount,q.auto_enabled,q.cost_snapshot);
     const o=getOrder(user,token);reserveStock(o);deliverStock(o);
@@ -162,7 +162,7 @@ function createManualProducts({diagnostics,db,staff,audit=()=>{},maintenance=()=
   async function fulfillPayment(payment){const o=settle(payment);await notify(o);return o;}
   const reserveInvoice=db.transaction((user,token)=>{const previous=db.prepare('SELECT * FROM manual_product_orders WHERE id=?').get(token);
     if(previous){if(previous.discord_id!==user || previous.payment_method!=='qris')throw Error('Pesanan sudah memakai metode pembayaran lain.');return {order:previous,created:false};}
-    payments.assertCanCreate?.(user);const q=checkout(user,token);if(q.amount<1000)throw Error('QRIS minimal 1.000 IDR. Gunakan saldo untuk harga lebih kecil.');const invoice='manual-buy-'+randomUUID();
+    payments.assertCanCreate?.(user);const q=checkout(user,token);checkPurchase('digital',user,q.amount);if(q.amount<1000)throw Error('QRIS minimal 1.000 IDR. Gunakan saldo untuk harga lebih kecil.');const invoice='manual-buy-'+randomUUID();
     db.prepare("INSERT INTO manual_product_orders(id,discord_id,product_id,product_name,description,amount,automatic,payment_method,invoice_id,state,cost_snapshot) VALUES(?,?,?,?,?,?,?,'qris',?,'awaiting_payment',?)").run(token,user,q.product_id,q.product_name,q.description,q.amount,q.auto_enabled,invoice,q.cost_snapshot);
     const o=getOrder(user,token);reserveStock(o);return {order:o,created:true};
   });

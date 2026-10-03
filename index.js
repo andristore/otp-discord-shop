@@ -1,3 +1,4 @@
+const {createShopUpgrades,createShopUpgradesHandler}=require('./shop-upgrades');
 const {protectOwnerInteraction}=require('./owner-privacy');
 require("dotenv").config();
 const express = require("express");
@@ -81,13 +82,14 @@ if (db.prepare("SELECT COUNT(*) c FROM products").get().c === 0) {
 }
 
 const pricing=createPricing(db);
-let storeFeatures;
+let storeFeatures,upgrades;
+const checkPurchase=(...args)=>upgrades?.checkPurchase(...args);
 const assertStoreOpen=()=>storeFeatures?.assertOpen();
-const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
+const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen,checkPurchase});
 app.use(express.json({verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
 let direct,manualProducts;
 const payments=createPayments({diagnostics,db,onSettled:payment=>payment.order_id.startsWith('manual-buy-')?manualProducts.fulfillPayment(payment):direct.fulfill(payment)});
-direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
+direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen,checkPurchase});
 payments.mount(app);
 const directPoll=setInterval(()=>direct.poll().catch(console.error),30000);
 directPoll.unref();
@@ -275,11 +277,11 @@ app.post("/api/discord/balance",admin, (req,res)=>{
 
 const client = new Client({intents:[GatewayIntentBits.Guilds]});
 const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
-const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
+const staff=createStaff({db});upgrades=createShopUpgrades({db,staff,sendDM:sendDiscordDM,resolveUser:id=>client.users.fetch(id)});staff.canRoute=(user,id)=>upgrades.canRoute(user,id);configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
 const languages=createLanguages({db,staff});
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM,resolveInfoChannel:async id=>{const c=await client.channels.fetch(id);if(!c)return null;const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);return {id:c.id,guildId:c.guildId,type:c.type,canInfo:!!p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages),send:payload=>c.send(payload)};}});
-manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
-const digiflazz=createDigiflazz({db,pricing,assertOpen:assertStoreOpen,staff,sendDM:sendDiscordDM,audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
+manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),checkPurchase,audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
+const digiflazz=createDigiflazz({db,pricing,assertOpen:assertStoreOpen,checkPurchase,nicknameChecker:upgrades.nickname,needsNickname:upgrades.needsNickname,observeCatalog:upgrades.observeCatalog,staff,sendDM:sendDiscordDM,audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 digiflazz.mount(app);
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff,isMember:async(guildId,userId)=>{const guild=client.guilds.cache.get(guildId);if(!guild)return false;const member=await guild.members.fetch({user:userId,force:true});return !!member;}});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
@@ -344,6 +346,8 @@ async function startDiscord(){
   const efficiency=createEfficiency({db,staff});
   const toolkit=createShopTools({db,staff,language:id=>languages.get(id),payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
   const shopHealth=createShopHealth({diagnostics,db,staff,payments,language:id=>languages.get(id),products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
+  const handleUpgrades=createShopUpgradesHandler({discord:require("discord.js"),model:upgrades,staff,tools:toolkit,digiflazz,smscode,efficiency});
+  const upgradeAlertsPoll=setInterval(()=>upgrades.pollAlerts().catch(console.error),60000);upgradeAlertsPoll.unref();upgrades.pollAlerts().catch(console.error);
   const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
   const buyerManagement=createBuyerManagement({db,staff});
   const handleBuyerManagement=createBuyerManagementHandler({discord:require("discord.js"),model:buyerManagement,staff});
@@ -386,6 +390,8 @@ async function startDiscord(){
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
+      if(await handleUpgrades(i))return;
+      if(i.customId==='admin_balance_save'&&!staff.isOwner(i.user.id)&&upgrades.settings().approvalThreshold>0&&Number(i.fields.getTextInputValue('amount'))>=upgrades.settings().approvalThreshold){await i.deferReply({ephemeral:true});const p=await upgrades.requestCredit(i);await i.editReply({content:'Pengajuan '+p.id+' menunggu owner di Dashboard Owner → Pengajuan Saldo. Saldo belum ditambahkan.',allowedMentions:{parse:[]}});return;}
       if(await handleHealth(i))return;
       if(await handleOrderChannel(i))return;
       if(await handleImprovements(i))return;

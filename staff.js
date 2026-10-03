@@ -104,7 +104,7 @@ function createStaffHandler({discord,staff,resolveUser}) {
         const target=id.split(':')[1];
         if(id.startsWith('admin_staff_revoke:')){staff.change(i.user.id,target,0);await i.editReply({content:`✅ Akses admin ${target} dicabut.`,components:[row([['admin_staff_list:0','Daftar Admin']])]});}
         else {
-          const actions=staff.isOwner(target)?[]:[['admin_staff_revoke:'+target,'Cabut Akses Admin']];actions.push(['admin_staff_list:0','Kembali']);
+          const actions=staff.isOwner(target)?[]:[['admin_upgrade_role:'+target,'Atur Izin Admin'],['admin_staff_revoke:'+target,'Cabut Akses Admin']];actions.push(['admin_staff_list:0','Kembali']);
           await i.editReply({content:`ID: ${target}\nPeran: ${staff.isOwner(target)?'Owner':'Admin'}\nAdmin dapat mengelola saldo, harga, transaksi dan izin server toko. Pencabutan akses berlaku segera.`,components:[row(actions)]});
         }
       } else if(id.startsWith('admin_staff_list:')) {

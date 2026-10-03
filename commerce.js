@@ -1,5 +1,5 @@
 const {randomUUID}=require('node:crypto');
-function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{}}) {
+function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{},checkPurchase=()=>{}}) {
   const columns=db.prepare('PRAGMA table_info(orders)').all().map(c=>c.name);
   if(!columns.includes('provider_amount'))db.exec('ALTER TABLE orders ADD COLUMN provider_amount INTEGER');
   if(!columns.includes('refunded'))db.exec('ALTER TABLE orders ADD COLUMN refunded INTEGER NOT NULL DEFAULT 0');
@@ -19,6 +19,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{}})
     assertOpen();
     const q=checkouts.get(token);
     if(!q || q.userId!==userId || q.expires<Date.now())throw new Error('Konfirmasi kedaluwarsa. Pilih produk kembali.');
+    if(!q.ownerOnly)checkPurchase('otp',userId,q.amount);
     if(q.ownerOnly&&!isOwner(userId))throw Error('Hanya owner boleh memakai saldo provider.');
     if(locks.has(userId))throw new Error('Pembelian sedang diproses. Tunggu hasilnya.');
     if(!q.ownerOnly&&pricing.price(q.providerAmount)!==(q.originalAmount ?? q.amount))throw new Error('Harga jual berubah. Pilih produk kembali untuk melihat harga terbaru.');
@@ -32,6 +33,7 @@ function createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen=()=>{}})
       const providerAmount=Number(order.amount?.canonical_amount ?? order.amount);
       if(providerAmount!==q.providerAmount)throw new Error('Harga provider berubah. Order akan dibatalkan; pilih produk kembali.');
       db.transaction(()=>{
+        if(!q.ownerOnly)checkPurchase('otp',userId,q.amount);
         if(!q.ownerOnly){const debit=db.prepare('UPDATE users SET balance=balance-? WHERE discord_id=? AND balance>=?').run(q.amount,userId,q.amount);
         if(!debit.changes)throw new Error('Saldo tidak cukup.');
         coupons?.claim(userId,q,'wallet:'+String(order.id));}

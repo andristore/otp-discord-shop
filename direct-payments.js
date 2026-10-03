@@ -1,7 +1,7 @@
 const {errorText}=require('./languages');
 const {buyerLabel}=require('./buyer-profiles');
 const {randomUUID}=require('node:crypto');
-function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen=()=>{}}) {
+function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen=()=>{},checkPurchase=()=>{}}) {
   db.exec(`CREATE TABLE IF NOT EXISTS direct_purchases (
     invoice_id TEXT PRIMARY KEY,quote_token TEXT UNIQUE NOT NULL,discord_id TEXT NOT NULL,
     product_id INTEGER NOT NULL,platform_id TEXT,country_id TEXT,name TEXT NOT NULL,
@@ -68,6 +68,7 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     if(previous)return {purchase:previous,payment:payments.get(previous.invoice_id,userId)};
     payments.assertCanCreate?.(userId);
     const q=commerce.checkout(userId,token);
+    checkPurchase('otp',userId,q.amount);
     require('./payments').parseCustomerEmail(customer.email);
     if(q.amount<1000 || q.amount>1000000)throw new Error('Harga produk di luar batas QRIS 1.000–1.000.000 IDR. Gunakan saldo bot untuk harga di bawah 1.000 IDR.');
     const invoiceId='maboyy-buy-'+randomUUID();

@@ -122,7 +122,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Sistem').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
         ...(staff?.isOwner?.(user)?[new ButtonBuilder().setCustomId('admin_digiflazz').setLabel('Digiflazz (Owner)').setStyle(ButtonStyle.Primary)]:[]),
-        new ButtonBuilder().setCustomId('admin_eff_summary').setLabel('Ringkasan').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(staff?.isOwner?.(user)?'admin_upgrade_dashboard':'admin_eff_summary').setLabel(staff?.isOwner?.(user)?'Dashboard Owner':'Ringkasan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('shop_language:admin').setLabel('Bahasa / Language').setStyle(ButtonStyle.Primary)
       )]};

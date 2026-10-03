@@ -93,7 +93,7 @@ function createOrderHistoryHandler({discord,model,payments,premium,language=()=>
      actions.push(button((o.kind==='digital'?'manual_invoice_check:':'direct_check:')+o.invoice,'Cek Pembayaran & Pesanan',3));
     }else content+='\n'+t(i.user.id,'Bukti pembayaran saldo internal toko.','Internal store balance payment receipt.');
     if(o.kind!=='game')content+='\n'+progressText(orderProgress(o,o.kind,verifiedPayment),language(i.user.id)==='en');
-    if(o.kind==='game'){if(o.sn)content+='\nSN: '+safe(o.sn);if(o.refunded)content+='\nSaldo telah dikembalikan.';if(o.testing)content+='\nMODE UJI — bukan topup nyata.';actions.push(button('df_check:'+o.ref_id,'Cek Status',3),button('df_detail:'+o.product_id,'Beli Lagi'));
+    if(o.kind==='game'){if(o.sn)content+='\nSN: '+safe(o.sn);if(o.refunded)content+='\nSaldo telah dikembalikan.';if(o.testing)content+='\nMODE UJI — bukan topup nyata.';actions.push(button('df_check:'+o.ref_id,'Cek Status',3),button('df_repeat:'+o.ref_id,'Beli Lagi'));
     }else if(o.kind==='digital'){
      if(o.state==='completed'&&o.delivery)content+=`\n\n**${t(i.user.id,'Data Produk','Product Data')}**\n${safe(o.delivery)}`;
      actions.push(button('manual_repeat:'+o.id,'Beli Lagi'));
@@ -103,7 +103,7 @@ function createOrderHistoryHandler({discord,model,payments,premium,language=()=>
      actions.push(button('check_otp:'+o.provider_order_id,'Cek OTP',3));
      if(o.key.startsWith('otp:'))actions.push(button('buy_again:'+o.id,'Beli Lagi'));
     }
-    if(actions.length)components.push(row(...actions));
+    for(let j=0;j<actions.length;j+=5)components.push(row(...actions.slice(j,j+5)));
     components.push(row(button('history_list:all:orders:0','Kembali'),button('shop_home','Menu Awal')));
     const guide=premium&&o.kind==='digital'&&o.state==='completed'&&o.guide_snapshot?[{title:t(i.user.id,'Panduan Penggunaan','Usage Guide'),description:safe(o.guide_snapshot)}]:[];
     // Long delivery data stays in a private embed, avoiding Discord's content limit.

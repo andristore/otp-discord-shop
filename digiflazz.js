@@ -19,7 +19,7 @@ function hmacValid(secret,raw,header){
   const a=Buffer.from(supplied),b=Buffer.from(expected);return a.length===b.length&&timingSafeEqual(a,b);
 }
 
-function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Date.now(),assertOpen=()=>{},staff,sendDM,audit=()=>{}}){
+function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Date.now(),assertOpen=()=>{},checkPurchase=()=>{},nicknameChecker=async()=>null,needsNickname=()=>false,observeCatalog=()=>{},staff,sendDM,audit=()=>{}}){
   db.exec(`
     CREATE TABLE IF NOT EXISTS digiflazz_products(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +76,7 @@ function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Dat
     CREATE TABLE IF NOT EXISTS digiflazz_favorites(discord_id TEXT NOT NULL,category TEXT NOT NULL,brand TEXT NOT NULL,PRIMARY KEY(discord_id,category,brand));
     CREATE TABLE IF NOT EXISTS digiflazz_alerts(key TEXT PRIMARY KEY,kind TEXT NOT NULL,revision INTEGER NOT NULL,product_id INTEGER,body TEXT NOT NULL,ack_revision INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS digiflazz_alert_delivery(key TEXT NOT NULL,revision INTEGER NOT NULL,owner_id TEXT NOT NULL,sent INTEGER NOT NULL DEFAULT 0,attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(key,revision,owner_id));`);
+  add('digiflazz_orders','nickname','TEXT');
   const initialPricing=pricing.get();db.prepare('UPDATE digiflazz_settings SET basis_points=?,fee=? WHERE basis_points IS NULL').run(initialPricing.basisPoints,initialPricing.fee);
   const admin=user=>{if(!staff?.isOwner(user))throw Error('Akses ditolak. Digiflazz khusus owner.');};
   const settings=()=>db.prepare('SELECT * FROM digiflazz_settings WHERE id=1').get();
@@ -117,7 +118,7 @@ function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Dat
       up.run(String(p.buyer_sku_code),String(p.product_name),String(p.category||''),String(p.brand||''),String(p.type||''),price,p.buyer_product_status===true?1:0,p.seller_product_status===true?1:0,p.unlimited_stock===true?1:0,positiveInt(p.stock||0,'Stok'),p.multi?1:0,String(p.desc||'').slice(0,900),stamp);
       if(old&&old.category===category()&&price>old.provider_price)queueAlert('price:'+old.sku,'price',old.id,'Modal Digiflazz naik: '+old.product_name+' ('+old.sku+')\n'+old.provider_price+' → '+price+' IDR. Harga jual tetap: '+(old.sell_price??'mengikuti markup')+'. Periksa harga jual.',stamp);
       db.prepare('UPDATE digiflazz_products SET start_cut_off=?,end_cut_off=? WHERE sku=?').run(String(p.start_cut_off||'00:00'),String(p.end_cut_off||'00:00'),String(p.buyer_sku_code));
-    }db.prepare('UPDATE digiflazz_settings SET synced_ms=? WHERE id=1').run(stamp);});tx();return rows.length;
+    }db.prepare('UPDATE digiflazz_settings SET synced_ms=? WHERE id=1').run(stamp);});tx();observeCatalog(db.prepare('SELECT * FROM digiflazz_products WHERE category=?').all(category()));return rows.length;
     }finally{syncing=false;}
   }
   function availableSql(){return `enabled=1 AND buyer_active=1 AND seller_active=1 AND (unlimited_stock=1 OR stock>0)`;}
@@ -130,8 +131,10 @@ function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Dat
   function product(id){const p=db.prepare('SELECT * FROM digiflazz_products WHERE id=?').get(Number(id));if(!p)throw new Error('Produk Digiflazz tidak ditemukan.');return decorate(p);}
   function decorate(p){const preset=!p.target_override?db.prepare('SELECT * FROM digiflazz_brand_presets WHERE category=? AND brand=?').get(p.category,p.brand):null;return {...p,...(preset?{target_format:preset.target_format,target_help:preset.target_help}:{}),selling_price:price(p)};}
   const quotes=new Map();
-  function quote(userId,productId,customerNo){
+  function quote(userId,productId,customerNo,nickname=null){
     assertOpen();requireConfig();if(testing()&&staff&&!staff.isOwner(userId))throw Error('Mode uji Digiflazz hanya untuk owner.');if(!settings().enabled)throw Error('Layanan Digiflazz sedang ditutup admin.');const p=product(productId);
+    checkPurchase('game',userId,p.selling_price,p.brand);
+    if(needsNickname(p.brand)&&!nickname)throw Error('Cek nickname wajib. Buka konfirmasi topup kembali.');
     if(!p.enabled||p.category!==category()||!p.buyer_active||!p.seller_active||(!p.unlimited_stock&&p.stock<1))throw new Error('Produk sedang tidak tersedia.');
     if(cutoff(p))throw Error('Produk sedang dalam jadwal tutup provider.');
     if(now()-p.updated_ms>86400000)throw Error('Katalog perlu disinkronkan admin.');
@@ -139,8 +142,10 @@ function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Dat
     if(!customerNo||customerNo.length>100||!/^[a-zA-Z0-9._@+|\-]+$/.test(customerNo))throw new Error('ID/nomor tujuan tidak valid.');
     if(p.selling_price<p.provider_price||p.selling_price>10000000)throw Error('Harga jual harus minimal modal dan maksimal 10 juta.');
     for(const [k,v]of quotes)if(v.expires<=now())quotes.delete(k);
-    const token=randomUUID();quotes.set(token,{userId:String(userId),productId:p.id,sku:p.sku,name:p.product_name,brand:p.brand,customerNo,providerPrice:p.provider_price,amount:p.selling_price,expires:now()+5*60000});return {token,...quotes.get(token)};
+    const token=randomUUID();quotes.set(token,{userId:String(userId),productId:p.id,sku:p.sku,name:p.product_name,brand:p.brand,customerNo,nickname,providerPrice:p.provider_price,amount:p.selling_price,expires:now()+5*60000});return {token,...quotes.get(token)};
   }
+  async function prepareQuote(user,id,target){target=String(target||'').trim();if(!/^[a-zA-Z0-9._@+|\-]{1,100}$/.test(target))throw Error('ID/nomor tujuan tidak valid.');const p=product(id);checkPurchase('game',user,p.selling_price,p.brand);const name=await nicknameChecker(p.brand,target);return quote(user,id,target,name);}
+  function repeat(user,ref){const o=db.prepare('SELECT * FROM digiflazz_orders WHERE ref_id=? AND discord_id=?').get(String(ref),String(user));if(!o)throw Error('Pesanan tidak ditemukan.');if(!['success','failed'].includes(o.status))throw Error('Tunggu pesanan lama selesai sebelum membeli ulang.');return o;}
   function debit(user,amount){
     db.prepare('INSERT INTO users(discord_id,balance) VALUES(?,0) ON CONFLICT(discord_id) DO NOTHING').run(user);
     const r=db.prepare('UPDATE users SET balance=balance-? WHERE discord_id=? AND balance>=?').run(amount,user,amount);if(r.changes!==1)throw new Error('Saldo tidak cukup. Isi saldo dahulu.');
@@ -172,9 +177,10 @@ function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Dat
   }
   async function buy(userId,token){
     assertOpen();const q=quotes.get(token);if(!q||q.userId!==String(userId)||q.expires<=now())throw new Error('Konfirmasi kedaluwarsa. Pilih produk kembali.');quotes.delete(token);
-    const verified=quote(userId,q.productId,q.customerNo);quotes.delete(verified.token);const latest=product(q.productId);if(latest.provider_price!==q.providerPrice||latest.selling_price!==q.amount)throw new Error('Harga berubah. Pilih produk kembali.');
+    const verified=quote(userId,q.productId,q.customerNo,q.nickname);quotes.delete(verified.token);const latest=product(q.productId);if(latest.provider_price!==q.providerPrice||latest.selling_price!==q.amount)throw new Error('Harga berubah. Pilih produk kembali.');
+    checkPurchase('game',userId,q.amount,q.brand);
     const ref='DF-'+randomUUID();let row;
-    db.transaction(()=>{if(!latest.multi&&db.prepare("SELECT 1 FROM digiflazz_orders WHERE sku=? AND customer_no=? AND status<>'failed' AND created_ms>=?").get(q.sku,q.customerNo,Math.floor((now()+25200000)/86400000)*86400000-25200000))throw Error('Provider membatasi tujuan yang sama satu kali per hari untuk produk ini.');debit(String(userId),q.amount);const r=db.prepare(`INSERT INTO digiflazz_orders(ref_id,discord_id,product_id,sku,product_name,customer_no,provider_price,amount,status,created_ms,updated_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(ref,String(userId),q.productId,q.sku,q.name,q.customerNo,q.providerPrice,q.amount,'creating',now(),now());db.prepare('UPDATE digiflazz_orders SET testing=?,account_hash=? WHERE id=?').run(testing()?1:0,accountHash(),r.lastInsertRowid);row=db.prepare('SELECT * FROM digiflazz_orders WHERE id=?').get(r.lastInsertRowid);})();
+    db.transaction(()=>{if(!latest.multi&&db.prepare("SELECT 1 FROM digiflazz_orders WHERE sku=? AND customer_no=? AND status<>'failed' AND created_ms>=?").get(q.sku,q.customerNo,Math.floor((now()+25200000)/86400000)*86400000-25200000))throw Error('Provider membatasi tujuan yang sama satu kali per hari untuk produk ini.');debit(String(userId),q.amount);const r=db.prepare(`INSERT INTO digiflazz_orders(ref_id,discord_id,product_id,sku,product_name,customer_no,provider_price,amount,status,created_ms,updated_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(ref,String(userId),q.productId,q.sku,q.name,q.customerNo,q.providerPrice,q.amount,'creating',now(),now());db.prepare('UPDATE digiflazz_orders SET testing=?,account_hash=?,nickname=? WHERE id=?').run(testing()?1:0,accountHash(),q.nickname||null,r.lastInsertRowid);row=db.prepare('SELECT * FROM digiflazz_orders WHERE id=?').get(r.lastInsertRowid);})();
     try{return await sendTransaction(row);}catch(e){db.prepare("UPDATE digiflazz_orders SET status='pending',message=?,updated_ms=? WHERE id=? AND status='creating'").run('Status provider belum terkonfirmasi: '+String(e.message).slice(0,300),now(),row.id);return db.prepare('SELECT * FROM digiflazz_orders WHERE id=?').get(row.id);}
   }
   async function recheck(refId,userId){const row=db.prepare('SELECT * FROM digiflazz_orders WHERE ref_id=? AND discord_id=?').get(String(refId),String(userId));if(!row)throw new Error('Pesanan tidak ditemukan.');if(['success','failed'].includes(row.status))return row;try{return await sendTransaction(row);}catch{return db.prepare('SELECT * FROM digiflazz_orders WHERE id=?').get(row.id);}}
@@ -235,7 +241,7 @@ function createDigiflazz({db,pricing,env=process.env,fetchImpl=fetch,now=()=>Dat
   function toggleFavorite(user,id){const p=product(id);if(p.category!==category())throw Error('Kategori tidak tersedia.');const old=db.prepare('SELECT 1 FROM digiflazz_favorites WHERE discord_id=? AND category=? AND brand=?').get(String(user),p.category,p.brand);if(old){db.prepare('DELETE FROM digiflazz_favorites WHERE discord_id=? AND category=? AND brand=?').run(String(user),p.category,p.brand);return false;}db.prepare('INSERT INTO digiflazz_favorites VALUES(?,?,?)').run(String(user),p.category,p.brand);return true;}
   function favoritePage(user,n=0){return page('SELECT MIN(p.id) id,p.brand,COUNT(*) count FROM digiflazz_favorites f JOIN digiflazz_products p ON p.category=f.category AND p.brand=f.brand WHERE f.discord_id=? AND f.category=? GROUP BY p.brand ORDER BY p.brand',[String(user),category()],n);}
   function report(user,period='today'){admin(user);if(!['today','month','all'].includes(period))throw Error('Periode laporan tidak dikenal.');const date=new Date(now()+25200000).toISOString().slice(0,10);const since=period==='all'?0:Date.parse((period==='today'?date:date.slice(0,7)+'-01')+'T00:00:00+07:00');return {...db.prepare(`SELECT COUNT(*) count,COALESCE(SUM(amount),0) revenue,COALESCE(SUM(CASE WHEN actual_cost IS NOT NULL THEN actual_cost ELSE 0 END),0) cost,COALESCE(SUM(CASE WHEN actual_cost IS NOT NULL THEN amount-actual_cost ELSE 0 END),0) profit,SUM(CASE WHEN actual_cost IS NULL THEN 1 ELSE 0 END) unknown FROM digiflazz_orders WHERE status='success' AND refunded=0 AND testing=0 AND created_ms>=?`).get(since),period};}
-  return {configureAlerts,monitorAlerts,priceAlerts,ackPrices,preset,toggleFavorite,favoritePage,report,settings,catalogPage,brandPage,saldo,configure,configureService,toggleBrand,adminOrders,adminCheck,overview,configured,testing,category,sync,brands,products,product,quote,buy,recheck,recent,poll,mount,apply,hmacValid:(raw,header)=>hmacValid(String(env.DIGIFLAZZ_WEBHOOK_SECRET||''),raw,header)};
+  return {prepareQuote,repeat,configureAlerts,monitorAlerts,priceAlerts,ackPrices,preset,toggleFavorite,favoritePage,report,settings,catalogPage,brandPage,saldo,configure,configureService,toggleBrand,adminOrders,adminCheck,overview,configured,testing,category,sync,brands,products,product,quote,buy,recheck,recent,poll,mount,apply,hmacValid:(raw,header)=>hmacValid(String(env.DIGIFLAZZ_WEBHOOK_SECRET||''),raw,header)};
 }
 
 function createDigiflazzHandler({discord,model,getBalance,staff}){
@@ -284,6 +290,7 @@ function createDigiflazzHandler({discord,model,getBalance,staff}){
    if(action==='admin_df_brand_edit'){const p=model.product(arg);await i.showModal(form('admin_df_brand_save:'+p.id,'Atur Semua Produk Layanan',[field('enabled','Semua SKU layanan: 1 aktif / 0 tutup','',1)]));return true;}
    if(action==='df_target_open'||action==='df_product'){const p=model.product(arg);await i.showModal(form('df_target:'+p.id,'Tujuan Topup',[field('customer_no','ID pemain / nomor tujuan','',80),...(p.target_format==='id'?[]:[field('server','Server / Zone ID','',20)])]));return true;}
    if(action==='df_search'||action==='admin_df_search'){await i.showModal(form(admin?'admin_df_search_submit':'df_search_submit','Cari Produk Digiflazz',[field('query','Nama game / produk / kode SKU','',80)]));return true;}
+   if(action==='df_repeat'){const o=model.repeat(user,arg);await i.showModal(form('df_repeat_target:'+o.ref_id,'Beli Ulang Game',[field('customer_no','Tujuan lengkap sebelumnya; periksa lagi',o.customer_no,100)]));return true;}
    await i.deferReply({ephemeral:true});let payload;
    if(action==='admin_df_alert_save'){model.configureAlerts(user,i.fields.getTextInputValue('threshold'));payload=alerts();}
    else if(action==='admin_df_alerts')payload=alerts();
@@ -308,7 +315,8 @@ function createDigiflazzHandler({discord,model,getBalance,staff}){
    else if(action==='admin_df_sync'){await model.sync();if(!staff.isOwner(user))throw Error('Akses ditolak. Digiflazz khusus owner.');payload=home(user);payload.content='✅ Katalog disinkronkan. Pengaturan harga dan status toko dipertahankan.';}
    else if(action==='admin_df_saldo'){payload=view('💰 Saldo Digiflazz',money(await model.saldo(user)),[row(button('admin_digiflazz','Kembali'),button('admin_home','Menu Awal Admin'))]);}
    else if(action==='admin_df_connection'){const s=model.overview(user);payload=view('Koneksi & Webhook',`API: ${s.configured?'Dikonfigurasi':'Belum diisi'}\nMode: ${s.testing?'Uji':'Produksi'}\nWebhook: domain HTTPS bot + /webhooks/digiflazz\nCallback valid terakhir: ${s.webhook_ms?new Date(s.webhook_ms).toISOString():'Belum diterima'}\n\nBuka Keuangan → Cek Saldo Digiflazz untuk memeriksa koneksi API tanpa melakukan pembelian. Sinkron Katalog menguji akses daftar harga. Atur username, key, whitelist IP, dan secret webhook di Digiflazz/Railway.`,[row(button('admin_df_config','Kembali'))]);}
-   else if(action==='df_target'){const p=model.product(arg);let target=i.fields.getTextInputValue('customer_no').trim();if(!/^[a-zA-Z0-9._@+-]{1,80}$/.test(target))throw Error('ID tujuan tidak valid.');if(p.target_format!=='id'){const server=i.fields.getTextInputValue('server').trim();if(!/^[a-zA-Z0-9_-]{1,20}$/.test(server))throw Error('ID server tidak valid.');target+=p.target_format==='pipe'?'|'+server:server;}const q=model.quote(user,p.id,target),balance=await getBalance(user);payload=view('Konfirmasi Topup',`${safe(p.product_name)}\nTujuan: **${safe(target)}**\nHarga: **${money(q.amount)}**\nSaldo: ${money(balance)}\n${model.testing()?'MODE UJI — bukan topup nyata.\n':''}Pastikan ID/server benar; pembelian sukses tidak bisa dibatalkan.`,[row(button('df_buy:'+q.token,'Bayar Pakai Saldo',3),button('df_detail:'+p.id,'Kembali'))]);}
+   else if(action==='df_target'){const p=model.product(arg);let target=i.fields.getTextInputValue('customer_no').trim();if(!/^[a-zA-Z0-9._@+-]{1,80}$/.test(target))throw Error('ID tujuan tidak valid.');if(p.target_format!=='id'){const server=i.fields.getTextInputValue('server').trim();if(!/^[a-zA-Z0-9_-]{1,20}$/.test(server))throw Error('ID server tidak valid.');target+=p.target_format==='pipe'?'|'+server:server;}const q=await model.prepareQuote(user,p.id,target),balance=await getBalance(user);payload=view('Konfirmasi Topup',`${safe(p.product_name)}\nTujuan: **${safe(target)}**\nNickname: **${q.nickname?safe(q.nickname):'Belum diverifikasi (brand tidak dikonfigurasi)'}**\nHarga: **${money(q.amount)}**\nSaldo: ${money(balance)}\n${model.testing()?'MODE UJI — bukan topup nyata.\n':''}Pastikan ID/server benar; pembelian sukses tidak bisa dibatalkan.`,[row(button('df_buy:'+q.token,'Bayar Pakai Saldo',3),button('df_detail:'+p.id,'Kembali'))]);}
+   else if(action==='df_repeat_target'){const o=model.repeat(user,arg),target=i.fields.getTextInputValue('customer_no').trim(),q=await model.prepareQuote(user,o.product_id,target);payload=view('Konfirmasi Beli Ulang',`${safe(q.name)}\nTujuan: **${safe(target)}**\nNickname: ${q.nickname?safe(q.nickname):'Belum diverifikasi'}\nHarga terbaru: **${money(q.amount)}**\nPeriksa tujuan dan harga sebelum membayar. ${model.testing()?'MODE UJI — bukan topup nyata.':''}`,[row(button('df_buy:'+q.token,'Bayar Pakai Saldo',3),button('history_detail:game:'+o.id,'Batal'))]);}
    else if(action==='df_buy')payload=receipt(await model.buy(user,arg));
    else if(action==='df_check')payload=receipt(await model.recheck(arg,user));
    else if(action==='admin_df_check')payload=receipt(await model.adminCheck(user,arg),true);
