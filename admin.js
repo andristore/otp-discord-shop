@@ -77,20 +77,23 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audi
     if(id==='admin_system_data')return menu('🗂️ Data & Pemeliharaan','Backup data, aktivitas admin, dan status operasional toko.',[
       ['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_store_maintenance','Maintenance']], 'admin_system_menu');
   }
-  async function buyerBalances(requested=0) {
-    const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();
-    const pages=Math.max(1,Math.ceil(summary.count/10));
+  async function buyerBalances(requested=0,filter="all") {
+    if(!["all","positive","zero"].includes(filter))throw Error("Filter saldo tidak dikenal.");
+    const where=filter==="positive"?" WHERE balance>0":filter==="zero"?" WHERE balance=0":"";
+    const title={all:"Semua akun",positive:"Memiliki saldo",zero:"Saldo nol"}[filter];
+    const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total, COALESCE(SUM(CASE WHEN balance>0 THEN 1 ELSE 0 END),0) funded FROM users').get();
+    const pages=Math.max(1,Math.ceil(db.prepare("SELECT COUNT(*) n FROM users"+where).get().n/10));
     const page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1);
-    const rows=db.prepare('SELECT discord_id,balance FROM users ORDER BY balance DESC, discord_id ASC LIMIT 10 OFFSET ?').all(page*10);
+    const rows=db.prepare('SELECT discord_id,balance FROM users'+where+' ORDER BY balance DESC, discord_id ASC LIMIT 10 OFFSET ?').all(page*10);
     await hydrateBuyers(rows.map(r=>r.discord_id));
     return {content:'',allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💰 Daftar Saldo Pembeli')
-      .setDescription(`Total saldo akun: **${amount(summary.total)}**\n\n${rows.length?rows.map((r,n)=>`${page*10+n+1}. ${buyerLabel(r.discord_id)}\nID: ${r.discord_id}\nSaldo: **${amount(r.balance)}**`).join('\n\n'):'Belum ada akun pembeli tersimpan.'}`)
-      .setFooter({text:`Halaman ${page+1}/${pages} • ${summary.count} akun • Urutan saldo terbesar`})],components:[new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`admin_balances:${page-1}`).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
-        new ButtonBuilder().setCustomId(`admin_balances:${page+1}`).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1),
-        new ButtonBuilder().setCustomId(`admin_balances:${page}`).setLabel('Perbarui').setStyle(ButtonStyle.Primary),
+      .setDescription(`Total saldo akun: **${amount(summary.total)}**\nJumlah akun: **${summary.count}** • Memiliki saldo: **${summary.funded}**\nTampilan: **${title}**\n\n${rows.length?rows.map((r,n)=>`${page*10+n+1}. ${buyerLabel(r.discord_id,false)}\nID: ${r.discord_id}\nSaldo: **${amount(r.balance)}**`).join('\n\n'):(filter==='all'?'Belum ada akun pembeli tersimpan.':'Belum ada akun pada filter ini.')}`)
+      .setFooter({text:`Halaman ${page+1}/${pages} • ${db.prepare("SELECT COUNT(*) n FROM users"+where).get().n} akun • Urutan saldo terbesar`})],components:[new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`admin_balances:${page-1}:${filter}`).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
+        new ButtonBuilder().setCustomId(`admin_balances:${page+1}:${filter}`).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1),
+        new ButtonBuilder().setCustomId(`admin_balances:${page}:${filter}`).setLabel('Perbarui').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Kembali').setStyle(ButtonStyle.Secondary)
-      )]};
+      ),new ActionRowBuilder().addComponents(...[['all','Semua Akun'],['positive','Memiliki Saldo'],['zero','Saldo Nol']].map(([key,label])=>new ButtonBuilder().setCustomId('admin_balances:0:'+key+':filter').setLabel(label).setStyle(ButtonStyle.Primary).setDisabled(filter===key)))]};
   }
   function home() {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
@@ -160,7 +163,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audi
         await i.reply({ephemeral:true,content:'**Tes Pembelian OTP — Admin**\n\nTes menggunakan nomor SMSCode sungguhan. Pilih aplikasi, negara, operator, dan produk; harga ditampilkan sebelum Anda mengonfirmasi pembayaran.\n\nPembayaran memakai saldo akun admin atau QRIS yang tersedia. Saldo provider SMSCode juga harus cukup. Menekan Mulai Tes belum membeli nomor.\n\nSetelah order berhasil, gunakan nomor pada layanan yang dipilih untuk meminta SMS. Bot akan memperbarui status/OTP melalui webhook atau polling cadangan, lalu mengirim OTP ke DM akun admin yang membeli.\n\nOrder tetap tercatat di Riwayat OTP dan Riwayat Pesanan. Ini bukan transaksi gratis/simulasi; aturan pembatalan dan refund biasa tetap berlaku.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_products').setLabel('Mulai Tes Pembelian OTP').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
       }
       if(i.customId.startsWith('admin_balances:')) {
-        await i.update(await buyerBalances(Number(i.customId.split(':')[1])));return true;
+        await i.update(await buyerBalances(Number(i.customId.split(':')[1]),i.customId.split(':')[2]||'all'));return true;
       }
       if(['admin_catalog_menu','admin_catalog_provider','admin_catalog_manual','admin_catalog_promo','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu','admin_system_access','admin_system_provider','admin_system_data'].includes(i.customId)) {
         await i.update(section(i.customId));return true;
