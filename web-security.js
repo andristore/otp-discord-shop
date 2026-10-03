@@ -25,7 +25,7 @@ function createWebSecurity({env=process.env,now=Date.now}={}){
 function createDiagnostics({db,now=Date.now}){
   db.exec("CREATE TABLE IF NOT EXISTS bot_diagnostics(scope TEXT,code TEXT,ref TEXT,seen_at INTEGER,count INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(scope,code,ref))");
   function record(scope,code,ref=''){
-    if(!['payment','product_dm','product_poll','webhook','interaction'].includes(scope)||!['FAILED','REJECTED','UNCERTAIN'].includes(code))return;
+    if(!['payment','provider','product_dm','product_poll','webhook','interaction'].includes(scope)||!['FAILED','REJECTED','UNCERTAIN'].includes(code))return;
     ref=/^[a-zA-Z0-9_-]{1,80}$/.test(String(ref))?String(ref):'';
     try{db.prepare('INSERT INTO bot_diagnostics(scope,code,ref,seen_at) VALUES(?,?,?,?) ON CONFLICT(scope,code,ref) DO UPDATE SET count=count+1,seen_at=excluded.seen_at').run(scope,code,ref,now());
       db.prepare('DELETE FROM bot_diagnostics WHERE rowid NOT IN (SELECT rowid FROM bot_diagnostics ORDER BY seen_at DESC,rowid DESC LIMIT 100)').run();

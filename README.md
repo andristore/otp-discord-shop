@@ -1,3 +1,99 @@
+## Status transaksi dan pemeriksaan operasional — pembaruan terbaru
+
+**13 file runtime berubah dari paket sebelumnya:** index.js, payments.js, direct-payments.js, operations.js, shop-tools.js, manual-products.js, order-history.js, premium-products.js, languages.js, shop-improvements.js, shop-health.js, web-security.js, store-features.js. Jika paket sebelumnya sudah terpasang, unggah 13 file ini. Jika belum, gunakan seluruh 27 modul runtime. Paket tetap 55 file: 27 runtime, 25 tes, README.md, CARA_PASANG.txt, .env.example. Tidak ada dependency atau Variables baru. Pertahankan package.json, database, dan volume; jangan mengunggah database produksi atau rahasia ke GitHub.
+
+- Riwayat/invoice membedakan pembayaran terverifikasi, proses admin, menunggu OTP, data siap tetapi DM belum berhasil, dan DM terkirim. Status DM mengikuti penanda pengiriman tersimpan. Laporan channel juga membedakan pesanan selesai dan status DM. Pembayaran produk tidak ditampilkan sebagai isi saldo.
+- Pencarian admin yang sudah ada menerima username, ID Discord, invoice produk, dan referensi OTP. Hasil satu akun hanya muncul sekali; hasil dibatasi per halaman dan sesi pencarian berlaku 15 menit. Hak admin diperiksa kembali.
+- Catatan Gangguan memakai menu yang sudah ada. Owner menerima ringkasan kegagalan pembayaran/provider/webhook/pengiriman yang tercatat dalam 24 jam terakhir, maksimal sekali per kategori per 15 menit. Kegagalan DM dicoba paling cepat satu menit kemudian; owner dapat menonaktifkan peringatan. Ringkasan tidak menyertakan token atau isi akun. Ini bukan pemantau bot saat proses bot mati.
+- Kesiapan Toko menyediakan Periksa Stok untuk produk otomatis aktif yang stok jualnya melebihi data siap kirim. Pemeriksaan tidak mengubah stok atau data secara diam-diam. Stok jual dan data produk tetap terpisah.
+- Backup baru diperiksa dengan SQLite integrity_check, foreign_key_check, serta tabel wajib pada salinan terisolasi sebelum dijadikan backup terakhir. Backup gagal tidak menggantikan backup valid sebelumnya. Batas pemeriksaan 64 MB; tes ini tidak melakukan restore ke database aktif. Backup pada volume yang sama tetap perlu salinan terpisah untuk melindungi dari kehilangan volume.
+- Bahasa Inggris diperluas pada status transaksi, instruksi QRIS, notifikasi stok/masa aktif/dukungan, dan pesan kesalahan. Nama produk, deskripsi, panduan, respons admin, serta data akun/kode buatan admin dipertahankan. Tidak menjanjikan terjemahan otomatis semua konten admin.
+
+**Validasi: 310 tes lokal lulus dan 27 modul runtime lolos pemeriksaan sintaks.** Tes mencakup akses, pembayaran berulang, status DM, pencarian, backup gagal, retry/notifikasi, serta ID komponen. Belum diuji pada Discord/Railway/provider milik pengguna; hasil lokal bukan jaminan tanpa error di layanan eksternal. Setelah deploy, buka menu baru dari /admin dan /shop; pesan lama tidak otomatis berubah. Uji invoice, DM tertutup, dan tujuan channel sebelum memakai transaksi nyata.
+
+### Channel informasi maintenance dan pengumuman
+
+Buka **/admin → Sistem → Data & Pemeliharaan → Maintenance → Channel Informasi**. Owner memilih **Atur Channel**, mengisi ID server/channel teks, lalu **Tes Channel**. Bot harus berada di server tujuan dan memiliki View Channel serta Send Messages. Channel informasi terpisah dari channel laporan pesanan. Pengaturan tidak memindahkan channel akses /shop.
+
+Setelah diaktifkan, perubahan maintenance benar-benar dari nonaktif menjadi aktif, atau sebaliknya, membuat satu pengumuman otomatis. Menekan tombol yang sama tidak membuat pengumuman kedua. Mengatur channel pertama kali tidak langsung mengirim status lama; gunakan Tes Channel. Admin aktif dapat membuat info lain lewat **Buat Pengumuman → Pratinjau → Kirim ke Channel**; hanya pembuat dapat mengonfirmasi dan pratinjau kedaluwarsa 15 menit. Isi pengumuman publik, jangan masukkan password, token, atau data akun pembeli. Mention @everyone/role/user tidak memicu notifikasi.
+
+Antrean tersimpan setelah restart, maksimal 20 menunggu dan 5 dikirim per putaran sekitar 30 detik. Kegagalan izin/koneksi dicoba lagi paling cepat satu menit. Antrean/Pernah Gagal ditampilkan di menu. Nonaktifkan Info menghentikan pengiriman; mengaktifkan lagi melanjutkan antrean. Mengganti tujuan membatalkan antrean/pratinjau lama agar tidak terkirim ke server baru. Admin yang dicabut aksesnya tidak dapat mengirim pengumuman yang masih menunggu. Riwayat terkirim/dibatalkan dibersihkan setelah 30 hari. Fitur ini mengikuti perubahan maintenance oleh admin, bukan pendeteksi otomatis ketika proses bot/Railway mati. Jika proses mati setelah Discord menerima pesan tetapi sebelum sukses tersimpan, pengiriman ulang masih mungkin.
+
+Bagian di bawah mencatat pembaruan sebelumnya; daftar file di bagian paling atas adalah daftar unggahan rilis ini.
+
+---
+
+## Laporan pesanan selesai ke channel tertentu — pembaruan terbaru
+
+**3 file runtime berubah:** index.js, admin.js, order-history.js. Unggah ketiganya jika rilis operasional sebelumnya sudah terpasang. Jika belum, gunakan seluruh 27 modul runtime dari ZIP lengkap. Tidak ada dependency atau Variables baru; pertahankan package.json, database, dan volume. Paket tetap 55 file.
+
+Buka **/admin → Laporan → Channel Pesanan Selesai → Atur Channel** sebagai owner. Isi ID server dan ID channel teks tujuan. Bot harus berada di server tersebut dan memiliki izin View Channel, Send Messages, Embed Links. Di iPhone, aktifkan Developer Mode Discord lalu salin ID server dan channel. Channel laporan terpisah dari channel akses pembelian; tidak mengubah izin /shop. Hanya owner dapat mengubah tujuan, menonaktifkan, melakukan tes, dan mengirim riwayat lama. Admin terdaftar dapat melihat ringkasan pengaturan.
+
+Pilih **Tes Channel** untuk memastikan pesan dapat dikirim. Pesanan baru yang selesai dilaporkan otomatis setiap sekitar 30 detik, maksimal 10 per putaran. OTP dianggap berhasil saat status provider OTP_RECEIVED atau COMPLETED; perubahan status berikutnya tidak menghasilkan laporan kedua. Produk digital otomatis maupun yang diselesaikan admin memakai status completed. OTP menggunakan saldo/QRIS hanya dilaporkan sekali dari pesanan, bukan sekali lagi dari invoice. Pembelian provider khusus owner/test, refund, pesanan dibatalkan, dan pembayaran belum selesai tidak dilaporkan. Tes kirim produk ke DM tidak membuat laporan penjualan.
+
+Isi laporan: username jika tersimpan, satu ID pembeli, nama produk/varian, jenis, harga produk, metode pembayaran, invoice/referensi saldo, status selesai, serta tanggal pesanan UTC. Harga adalah harga produk, bukan total tagihan beserta biaya gateway. Nomor telepon, OTP/SMS, akun, password, data produk, dan deskripsi tidak dikirim ke channel. Mention dinonaktifkan. Siapa pun yang dapat membaca channel tujuan dapat membaca ringkasan transaksi; gunakan channel sesuai kebutuhan privasi toko.
+
+Saat pertama diaktifkan, riwayat lama tidak dikirim otomatis. **Kirim Riwayat Lama** menampilkan konfirmasi lalu memasukkan semua pesanan selesai yang belum pernah dilaporkan. Proses berjalan bertahap; jumlah Antrean/Terkirim bisa dilihat lewat Perbarui. Pesanan selesai selama fitur dinonaktifkan akan menyusul setelah diaktifkan lagi. Mengganti channel tidak mengirim ulang laporan yang sudah berhasil ke channel lama. Antrean dan penanda terkirim tersimpan di database setelah restart. Kegagalan izin/kirim dicoba lagi paling cepat satu menit kemudian, tanpa mengubah saldo, stok atau pengiriman DM pembeli. Status selesai berarti pesanan sudah selesai pada database; DM pembeli yang gagal tetap ditangani lewat fitur retry DM tersendiri. Jika koneksi/proses terputus setelah Discord menerima pesan tetapi sebelum penanda sukses tersimpan, pengiriman ulang masih mungkin terjadi.
+
+**Validasi: 296 tes lokal lulus**, termasuk privasi laporan, akses owner/admin, tujuan salah, izin hilang, retry, restart, konkurensi, batas batch, riwayat lama, deduplikasi OTP/invoice, dan konfigurasi nonaktif. Belum diuji pada akun Discord/Railway pengguna. Setelah unggah dan deployment berhasil, buka /admin baru lalu atur tujuan.
+
+---
+
+## Pengembangan operasional terbaru — tanpa perpanjangan langganan
+
+**6 file runtime berubah:** index.js, manual-products.js, payments.js, shop-health.js, languages.js, navigation.js. Tidak ada dependency, modul runtime atau Variables baru. Jika rilis audit sebelumnya belum dipasang, gunakan seluruh 27 modul runtime dari paket lengkap. ZIP tetap 55 file: 27 runtime, 25 tes, 3 dokumentasi/contoh konfigurasi. Pertahankan package.json, database dan volume.
+
+### Antrean pengerjaan admin
+
+/admin → Pembayaran → Pesanan & Verifikasi → Pesanan Produk menyediakan **Semua**, **Antrean**, **Tugas Saya**. Pesanan menunggu admin diurutkan dari yang paling lama (tanggal pembuatan pesanan). Buka detail lalu **Ambil Pesanan**. Penanggung jawab tersimpan setelah restart. Admin lain tidak dapat menyelesaikan atau me-refund pesanan tersebut; tombolnya dinonaktifkan dan pemeriksaan transaksi tetap menolak tombol/form lama yang dicoba kembali. Penanggung jawab dapat **Lepas Penugasan**; owner juga dapat melepasnya untuk dipindahkan. Jika penanggung jawab sudah dicabut akses adminnya, admin aktif lain dapat mengambil pesanan. Penyelesaian pesanan yang belum diambil tetap menetapkan admin pelaksana. Pengambilan tidak mengubah saldo/stok, dan penugasan tidak mengubah status pesanan menjadi status tambahan.
+
+### Peringatan stok per produk/varian
+
+/admin → Toko → Produk Lainnya → Kelola Produk → pilih produk/varian → Data & Stok → **Peringatan Stok**. Batas 0–1.000.000, kosong = nonaktif (bawaan). Nilai 0 berarti beri tahu saat habis. Produk manual memakai stok jual yang diatur; stok yang belum diatur tidak dianggap nol. Produk otomatis memakai jumlah yang benar-benar bisa dikirim: minimum stok jual dan data tersedia, atau data tersedia jika stok jual mengikuti data. Peringatan dikirim ke DM admin aktif, tanpa akun/kode produk.
+
+Satu notifikasi berhasil per admin selama stok tetap pada/di bawah batas. Setelah pemeriksaan melihat stok di atas batas, notifikasi aktif lagi jika stok turun. Mengubah batas atau menonaktifkan/mengaktifkan produk juga mengawali siklus baru. Stok yang naik lalu turun sebelum pemeriksaan berikutnya mungkin tidak teramati sebagai siklus baru. Pemeriksaan mengikuti polling produk 30 detik, maksimal 10 konfigurasi dan 5 percobaan DM per putaran; toko besar dapat membutuhkan beberapa putaran. DM gagal dicoba lagi, tanpa menandainya berhasil. Ini peringatan admin; notifikasi stok tersedia kembali bagi pembeli yang sudah ada tetap terpisah.
+
+### Riwayat perubahan produk
+
+Kelola Produk → pilih produk/varian → Ubah Produk → **Riwayat Perubahan** → pilih **Perubahan #...**. Catat admin, waktu, nilai sebelum/sesudah nama, deskripsi, harga, modal, stok jual, status aktif, kirim otomatis, penghapusan dan batas peringatan. Penambahan/perubahan data hanya mencatat ID serta jumlah data, tidak isi akun/kode. Rekaman mulai sejak pembaruan, maksimal 300 catatan per produk. Pengubahan data yang sama tanpa perubahan tidak menambah catatan; pengiriman ulang form yang sama tidak menggandakan perubahan. Perubahan dan catatan dibatalkan bersama jika audit gagal. Penjualan/reservasi otomatis bukan pengubahan admin dan tetap memakai riwayat transaksi/stok asli. Pengaturan panduan/durasi/garansi tetap memakai fitur premium yang sudah ada; fitur ini tidak menambahkan perpanjangan.
+
+### Pengingat invoice
+
+Invoice TriPay **baru** menyimpan batas 20 menit yang diminta saat membuat tagihan. Dalam 5 menit terakhir, bot memeriksa status melalui API gateway dahulu, lalu mengirim satu pengingat berhasil ke DM pemilik invoice. Tidak membuat invoice baru, memotong saldo/stok, memberi refund, atau menyatakan gagal hanya karena waktu lewat. Invoice lunas, tidak aktif, tidak punya QR, sudah melewati waktu, atau tidak mempunyai batas tersimpan dilewati. Pemeriksaan mengikuti polling kesiapan toko tiap menit, maksimal 5 invoice per putaran. Kegagalan API/DM dicoba lagi paling cepat setelah satu menit selama masih dalam jendela pengingat. English mengikuti bahasa pembeli. DM yang tertutup tidak menghalangi pengecekan melalui Pesanan → Invoice di server toko.
+
+Invoice lama dan invoice Midtrans tanpa batas tersimpan **tidak menggunakan perkiraan kedaluwarsa** sehingga tidak diberi pengingat ini. Konfirmasi/pengecekan pembayaran lama tetap tersedia. Penanda pengingat dan penugasan tersimpan setelah restart; seperti pengiriman DM lain, koneksi terputus setelah pesan terkirim tetapi sebelum penanda tersimpan masih dapat menimbulkan pengiriman ulang.
+
+**Validasi rilis: 289 tes lokal lulus**, termasuk hak admin/owner, penugasan konflik, rollback, urutan antrean, privasi/retensi perubahan, notifikasi setelah restart, rearm stok, konkurensi polling, pembayaran yang lunas saat pemeriksaan, retry dan bahasa pengingat. Seluruh 27 modul lolos syntax check. Belum diuji pada akun Discord/Railway/provider pengguna. Unggah enam file di atas lalu buka /admin dan /shop baru setelah deployment berhasil.
+
+---
+
+## Pemeriksaan seluruh kode — rilis terbaru
+
+**Hasil: 27 modul runtime diperiksa, 277 tes lokal lulus.** Semua impor file lokal tersedia dan seluruh modul lolos syntax check. Pemindaian blok identik lintas modul tidak menemukan salinan persis enam baris berurutan sepanjang lebih dari 180 karakter; ini bukan bukti bahwa semua fungsi secara semantik bebas kemiripan.
+
+### Perbaikan dari pemeriksaan ini
+
+1. Menghapus tujuh implementasi handler yang tidak terpakai karena sudah ditangani modul lain: riwayat OTP lama di index, ringkasan Pesanan Saya lama di efficiency, riwayat QRIS lama di direct-payments, riwayat produk pembeli lama di manual-products, serta pembayaran bermasalah dan dua halaman owner provider lama di admin. Tombol lama tetap didukung oleh order-history, operations dan owner-provider; tidak menghapus transaksi/database.
+2. Memperbaiki baris kosong setelah penggabungan tombol Menu Awal Admin. Sebelum menu dikirim melalui navigasi utama, periksa ID duplikat (termasuk tombol nonaktif), panjang ID, batas baris/tombol, serta dropdown pada baris tersendiri. Jika menu tidak valid, hentikan pengiriman payload tersebut dan gunakan penanganan kesalahan; pemeriksaan ini tidak menyembunyikan duplikasi dengan mengganti ID sembarangan.
+3. Pemeriksaan origin dashboard mencakup seluruh /api, termasuk endpoint pesanan dan saldo. Callback gateway tetap pada jalur verifikasi tanda tangan yang dipasang sebelum session/origin guard, sehingga tidak memerlukan cookie browser.
+4. Menghapus helper smsFinish yang tidak digunakan. Logika pembelian/refund/garansi tetap pada modul masing-masing.
+
+### File untuk dipasang
+
+Jika sudah memasang rilis audit sebelumnya (yang menambahkan web-security.js), ganti **6 file kode**: index.js, admin.js, efficiency.js, direct-payments.js, manual-products.js, navigation.js. README.md dan CARA_PASANG.txt juga diperbarui. Tidak ada dependency atau modul runtime baru pada rilis ini.
+
+Jika belum memasang rilis audit sebelumnya, gabungkan daftar di atas dengan delapan file dari bagian berikutnya: total **12 file kode berbeda**. Untuk pemasangan paket penuh, gunakan semua **27 file .js runtime**, tanpa file *.test.js. Pertahankan package.json yang sudah digunakan. ZIP tetap berisi **55 file**: 27 runtime, 25 file tes, README.md, CARA_PASANG.txt, dan .env.example.
+
+### Cakupan dan batas pemeriksaan
+
+Tes mencakup katalog/paginasi, tombol/navigasi, registrasi /shop /admin /ping, hak owner/admin/pembeli, server/channel/role dan DM, bahasa, produk/varian/garansi, stok dan data unik, pembayaran saldo/QRIS, callback dan pemulihan invoice, refund, voucher, riwayat milik pembeli, bukti manual, tiket, backup, arsip pembeli, laporan dan keamanan dashboard. Handler pembayaran gateway, DM gagal dan produk pending mempunyai fungsi berbeda walau berada dalam kategori pemeriksaan yang sama.
+
+Klaim garansi dan pengingat masa aktif **sudah ada** dalam premium-products.js. Jangan menambah implementasi garansi kedua. Shortcut seperti Ringkasan menuju modul utama merupakan navigasi, bukan proses transaksi terpisah. Fungsi pembentuk tombol/format angka yang pendek pada modul berbeda masih dapat mirip; penyatuan seluruh helper kosmetik tidak diperlukan untuk mencegah transaksi ganda.
+
+Belum menguji login Discord, deployment Railway, pembayaran sungguhan atau pengiriman provider dengan akun pengguna. Konfigurasi token, domain webhook dan izin channel tetap perlu diuji sesudah deployment. Hasil lokal tidak menjamin provider/jaringan tidak pernah error. Jangan menghapus shop.db, volume atau Variables. Buka /admin dan /shop baru setelah deploy; pesan lama tidak otomatis ditulis ulang.
+
+---
+
 ## Pembaruan terbaru: hasil audit dan perbaikan
 
 Ganti 7 file kode: `index.js`, `payments.js`, `manual-products.js`, `shop-tools.js`, `smscode-webhook.js`, `languages.js`, `shop-health.js`. Tambahkan `web-security.js`. Total **8 file kode** untuk pembaruan ini, pada folder yang sama dengan package.json. Jangan hanya mengganti index.js karena file baru wajib tersedia. Tidak ada dependency baru atau kewajiban membuat package-lock.json. Paket lengkap berisi **55 file**, termasuk **27 modul runtime**, 25 file tes, dan 3 file dokumentasi/contoh konfigurasi. Pertahankan package.json yang sudah dipakai di repository.

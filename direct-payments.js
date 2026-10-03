@@ -1,3 +1,4 @@
+const {errorText}=require('./languages');
 const {buyerLabel}=require('./buyer-profiles');
 const {randomUUID}=require('node:crypto');
 function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen=()=>{}}) {
@@ -127,7 +128,7 @@ function createDirectHandler({discord,direct,payments,language=()=>'id'}) {
         const invoice=id.slice(13);const row=await direct.refresh(invoice,i.user.id);const payment=payments.get(invoice,i.user.id);
         const response=status(row);
         if(row.state==='pending') {
-          response.content=`Status pembayaran: ${payment.status}. ${payment.credited?'Pembayaran diterima; menunggu provider.':['expire','deny','cancel','failure'].includes(payment.status)?'Tagihan tidak aktif. Pilih produk kembali untuk membuat tagihan baru.':'Menunggu pembayaran; jangan membayar tagihan lain untuk pesanan ini.'}`;
+          response.content=`${t(i.user.id,'Status pembayaran: ','Payment status: ')}${payment.status}. ${payment.credited?t(i.user.id,'Pembayaran diterima; menunggu provider.','Payment received; awaiting the provider.'):['expire','deny','cancel','failure'].includes(payment.status)?t(i.user.id,'Tagihan tidak aktif. Pilih produk kembali untuk membuat tagihan baru.','This invoice is inactive. Select the product again for a new invoice.'):t(i.user.id,'Menunggu pembayaran; jangan membayar tagihan lain untuk pesanan ini.','Awaiting payment; do not pay a different invoice for this order.')}`;
           if(payment.qr_url && payment.status==='pending')response.embeds=[new EmbedBuilder().setColor(0x5865F2).setTitle('QRIS Pembelian').setDescription(`Total: **${money(payment.total_charge || row.amount)}**\n${payment.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}`).setImage(payment.qr_url)];
         }
         await i.editReply(response);
@@ -136,10 +137,10 @@ function createDirectHandler({discord,direct,payments,language=()=>'id'}) {
         if(purchase.state!=='pending'){await i.editReply(status(purchase));return true;}
         if(!payment?.qr_url)throw new Error('QR belum tersedia. Hubungi admin untuk memeriksa riwayat tagihan.');
         await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Bayar Langsung QRIS')
-          .setDescription(`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payment.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran; OTP dikirim melalui DM saat masuk.`)
+          .setDescription(t(i.user.id,`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payment.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran; OTP dikirim melalui DM saat masuk.`,`Product: **${purchase.name}**\nProduct price: **${money(purchase.amount)}**\nCustomer QRIS fee: **${money(payment.fee_customer || 0)}**\nTotal to pay: **${money(payment.total_charge)}**\n${payment.production?'Scan the QRIS code to pay.':'TEST MODE — use the '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+' simulator.'}\nThe order is created after payment verification. Stock is checked after payment; if unavailable, the product price is refunded to your bot balance. QRIS fees are not refunded automatically. Use Check Payment to view the result; incoming OTPs are sent by DM.`))
           .setImage(payment.qr_url).setFooter({text:purchase.invoice_id})],components:[checkRow(purchase.invoice_id)]});
       }
-    }catch(e){await i.editReply({content:e.message,components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
+    }catch(e){await i.editReply({content:errorText(e,language(i.user.id)==='en'),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
     return true;
   }
   handler.status=status;

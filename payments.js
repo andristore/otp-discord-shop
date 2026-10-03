@@ -1,3 +1,4 @@
+const {errorText}=require('./languages');
 const {createHmac,timingSafeEqual,randomUUID}=require('node:crypto');
 function validSignature(raw,signature,key) {
   if(!key || !Buffer.isBuffer(raw) || typeof signature!=='string' || !/^[a-f0-9]{64}$/i.test(signature))return false;
@@ -25,7 +26,7 @@ function validateStatus(payment,status) {
     Number(status.amount_received)!==total-fee-merchantFee || !['UNPAID','PAID','FAILED','EXPIRED','REFUND'].includes(status.status))throw new Error('Data pembayaran tidak sesuai tagihan.');
   return status.status==='PAID';
 }
-function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{}}) {
+function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettled=async()=>{}}) {
   const apiKey=env.TRIPAY_API_KEY,privateKey=env.TRIPAY_PRIVATE_KEY,merchantCode=env.TRIPAY_MERCHANT_CODE;
   const gateway=env.PAYMENT_GATEWAY || 'tripay';
   if(!['tripay','midtrans'].includes(gateway))throw new Error('PAYMENT_GATEWAY harus tripay atau midtrans.');
@@ -36,6 +37,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
   const columns=new Set(db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name));
   for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT',expires_ms:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
   async function request(path,body,live=production) {
+    try{
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
     const base=live?'https://tripay.co.id/api':'https://tripay.co.id/api-sandbox';
     const response=await fetchImpl(base+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Accept:'application/json',Authorization:'Bearer '+apiKey},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(15000)});
@@ -47,6 +49,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
       throw e;
     }
     return result.data;
+    }catch(e){diagnostics?.record('payment','FAILED','tripay');throw e;}
   }
   const normalize=s=>({UNPAID:'pending',PAID:'settlement',EXPIRED:'expire',FAILED:'failure',REFUND:'refund'})[s];
   function qrUrl(value) {if(!value)return null;const u=new URL(value);if(u.protocol!=='https:' || u.username || u.password)throw new Error('Alamat QR TriPay tidak valid.');return u.href;}
@@ -110,8 +113,9 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
     recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5").all(userId)};
 }
-function createPaymentHandler({discord,payments,env=process.env,manualInstructions,adminIds}) {
+function createPaymentHandler({discord,payments,env=process.env,manualInstructions,adminIds,language=()=>'id'}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
+  const t=(user,id,en)=>language(user)==='en'?en:id;
   const money=v=>Number(v).toLocaleString('id-ID')+' IDR';
   return async function handlePayment(i) {
     const id=String(i.customId || '');
@@ -152,15 +156,15 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
         ]:[]});
       } else if(id.startsWith('topup_check:')) {
         const p=await payments.refresh(id.slice('topup_check:'.length),i.user.id);
-        await i.editReply({content:p.credited?`✅ Pembayaran diterima. ${money(p.amount)} sudah masuk ke saldo Anda.`:`Status pembayaran: ${p.status}. Saldo ditambahkan setelah pembayaran terkonfirmasi.`});
+        await i.editReply({content:p.credited?(p.purpose==='purchase'?t(i.user.id,'✅ Pembayaran pembelian terverifikasi. Lihat pengiriman di Pesanan → Riwayat Pesanan.','✅ Purchase payment verified. Check delivery in Orders → Order History.'):`${t(i.user.id,'✅ Pembayaran diterima. ','✅ Payment received. ')}${money(p.amount)}${t(i.user.id,' sudah masuk ke saldo Anda.',' has been added to your balance.')}`):`${t(i.user.id,'Status pembayaran: ','Payment status: ')}${p.status}. ${t(i.user.id,'Saldo ditambahkan setelah pembayaran terkonfirmasi.','Balance is credited after payment verification.')}`});
       } else {
         const p=await payments.create(i.user.id,parseTopup(i.fields.getTextInputValue('amount')),{email:i.fields.getTextInputValue('email'),name:i.user.username});
         await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 QRIS • Hi, Belanja Produk Digital Yukk')
-          .setDescription(`Saldo masuk: **${money(p.amount)}**\nBiaya QRIS pembeli: **${money(p.fee_customer || 0)}**\nTotal bayar: **${money(p.total_charge)}**\n${p.production?'Bayar dengan memindai QRIS.':'MODE UJI — gunakan simulator '+(p.gateway==='midtrans'?'Midtrans':'TriPay')+'; bukan pembayaran nyata.'}\nSaldo masuk otomatis setelah pembayaran dikonfirmasi.`)
+          .setDescription(t(i.user.id,`Saldo masuk: **${money(p.amount)}**\nBiaya QRIS pembeli: **${money(p.fee_customer || 0)}**\nTotal bayar: **${money(p.total_charge)}**\n${p.production?'Bayar dengan memindai QRIS.':'MODE UJI — gunakan simulator '+(p.gateway==='midtrans'?'Midtrans':'TriPay')+'; bukan pembayaran nyata.'}\nSaldo masuk otomatis setelah pembayaran dikonfirmasi.`,`Balance credit: **${money(p.amount)}**\nCustomer QRIS fee: **${money(p.fee_customer || 0)}**\nTotal to pay: **${money(p.total_charge)}**\n${p.production?'Scan the QRIS code to pay.':'TEST MODE — use the '+(p.gateway==='midtrans'?'Midtrans':'TriPay')+' simulator; this is not a real payment.'}\nYour balance is credited after payment verification.`))
           .setImage(p.qr_url).setFooter({text:p.order_id})],components:[new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('topup_check:'+p.order_id).setLabel('Cek Pembayaran').setStyle(ButtonStyle.Success))]});
       }
-    }catch(e){await i.editReply({content:e.message+' Hubungi admin jika status tagihan belum jelas.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
+    }catch(e){await i.editReply({content:errorText(e,language(i.user.id)==='en')+t(i.user.id,' Hubungi admin jika status tagihan belum jelas.',' Contact the admin if the invoice status is unclear.'),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
     return true;
   };
 }

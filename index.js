@@ -84,7 +84,7 @@ const assertStoreOpen=()=>storeFeatures?.assertOpen();
 const commerce=createCommerce({db,pricing,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
 app.use(express.json({verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
 let direct,manualProducts;
-const payments=createPayments({db,onSettled:payment=>payment.order_id.startsWith('manual-buy-')?manualProducts.fulfillPayment(payment):direct.fulfill(payment)});
+const payments=createPayments({diagnostics,db,onSettled:payment=>payment.order_id.startsWith('manual-buy-')?manualProducts.fulfillPayment(payment):direct.fulfill(payment)});
 direct=createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreateOrder,smsCancel,assertOpen:assertStoreOpen});
 payments.mount(app);
 const directPoll=setInterval(()=>direct.poll().catch(console.error),30000);
@@ -105,6 +105,7 @@ function admin(req,res,next){
 }
 
 async function smscode(path, options={}) {
+  try {
   const base = (process.env.SMSCODE_API_BASE_URL || "https://api.smscode.gg/v1").replace(/\/$/,"");
   if(!process.env.SMSCODE_API_TOKEN) throw new Error("SMSCODE_API_TOKEN belum diisi");
   const headers = {
@@ -119,6 +120,7 @@ async function smscode(path, options={}) {
     throw new Error(data?.error?.message || `SMSCode HTTP ${r.status}`);
   }
   return data;
+  }catch(e){diagnostics.record("provider","FAILED","smscode");throw e;}
 }
 
 function uuidKey(){ return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
@@ -273,7 +275,7 @@ const client = new Client({intents:[GatewayIntentBits.Guilds]});
 const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
 const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
 const languages=createLanguages({db,staff});
-storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM});
+storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM,resolveInfoChannel:async id=>{const c=await client.channels.fetch(id);if(!c)return null;const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);return {id:c.id,guildId:c.guildId,type:c.type,canInfo:!!p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages),send:payload=>c.send(payload)};}});
 manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
@@ -335,7 +337,7 @@ async function startDiscord(){
   }
 
   const efficiency=createEfficiency({db,staff});
-  const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
+  const toolkit=createShopTools({db,staff,language:id=>languages.get(id),payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
   const shopHealth=createShopHealth({diagnostics,db,staff,payments,language:id=>languages.get(id),products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
   const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
   const buyerManagement=createBuyerManagement({db,staff});
@@ -347,8 +349,8 @@ async function startDiscord(){
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024};},audit:toolkit.audit});
-  const premiumProducts=createPremiumProducts({db,staff,products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));}});
-  const handlePremiumProducts=createPremiumProductsHandler({discord:require("discord.js"),model:premiumProducts,products:manualProducts,staff});
+  const premiumProducts=createPremiumProducts({db,staff,language:id=>languages.get(id),products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));}});
+  const handlePremiumProducts=createPremiumProductsHandler({discord:require("discord.js"),language:id=>languages.get(id),model:premiumProducts,products:manualProducts,staff});
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,language:id=>languages.get(id),sendDM:async(id,payload,order)=>{const send=async()=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));};if(order)await improvements.send("digital",order.id,id,send);else await send();}});
   const handleImprovements=createImprovementsHandler({discord:require("discord.js"),model:improvements,products:manualProducts,operations,staff});
   const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments,premium:premiumProducts,language:id=>languages.get(id)});
@@ -356,7 +358,7 @@ async function startDiscord(){
   const handleOrderChannel=createOrderChannelHandler({discord:require('discord.js'),model:orderChannel,staff});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true,isOwner:id=>staff.isOwner(id)});
-  const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
+  const handlePayment=createPaymentHandler({discord:require("discord.js"),language:id=>languages.get(id),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
   const handleStaff=createStaffHandler({discord:require("discord.js"),staff,resolveUser:id=>client.users.fetch(id)});
   const handleOwnerProvider=createOwnerProviderHandler({discord:require("discord.js"),staff,commerce,smscode,smsCatalogProducts});
   const handleSMSWebhook=createSMSCodeWebhookHandler({staff});

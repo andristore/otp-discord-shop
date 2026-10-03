@@ -1,0 +1,959 @@
+## Status transaksi dan pemeriksaan operasional — pembaruan terbaru
+
+**13 file runtime berubah dari paket sebelumnya:** index.js, payments.js, direct-payments.js, operations.js, shop-tools.js, manual-products.js, order-history.js, premium-products.js, languages.js, shop-improvements.js, shop-health.js, web-security.js, store-features.js. Jika paket sebelumnya sudah terpasang, unggah 13 file ini. Jika belum, gunakan seluruh 27 modul runtime. Paket tetap 55 file: 27 runtime, 25 tes, README.md, CARA_PASANG.txt, .env.example. Tidak ada dependency atau Variables baru. Pertahankan package.json, database, dan volume; jangan mengunggah database produksi atau rahasia ke GitHub.
+
+- Riwayat/invoice membedakan pembayaran terverifikasi, proses admin, menunggu OTP, data siap tetapi DM belum berhasil, dan DM terkirim. Status DM mengikuti penanda pengiriman tersimpan. Laporan channel juga membedakan pesanan selesai dan status DM. Pembayaran produk tidak ditampilkan sebagai isi saldo.
+- Pencarian admin yang sudah ada menerima username, ID Discord, invoice produk, dan referensi OTP. Hasil satu akun hanya muncul sekali; hasil dibatasi per halaman dan sesi pencarian berlaku 15 menit. Hak admin diperiksa kembali.
+- Catatan Gangguan memakai menu yang sudah ada. Owner menerima ringkasan kegagalan pembayaran/provider/webhook/pengiriman yang tercatat dalam 24 jam terakhir, maksimal sekali per kategori per 15 menit. Kegagalan DM dicoba paling cepat satu menit kemudian; owner dapat menonaktifkan peringatan. Ringkasan tidak menyertakan token atau isi akun. Ini bukan pemantau bot saat proses bot mati.
+- Kesiapan Toko menyediakan Periksa Stok untuk produk otomatis aktif yang stok jualnya melebihi data siap kirim. Pemeriksaan tidak mengubah stok atau data secara diam-diam. Stok jual dan data produk tetap terpisah.
+- Backup baru diperiksa dengan SQLite integrity_check, foreign_key_check, serta tabel wajib pada salinan terisolasi sebelum dijadikan backup terakhir. Backup gagal tidak menggantikan backup valid sebelumnya. Batas pemeriksaan 64 MB; tes ini tidak melakukan restore ke database aktif. Backup pada volume yang sama tetap perlu salinan terpisah untuk melindungi dari kehilangan volume.
+- Bahasa Inggris diperluas pada status transaksi, instruksi QRIS, notifikasi stok/masa aktif/dukungan, dan pesan kesalahan. Nama produk, deskripsi, panduan, respons admin, serta data akun/kode buatan admin dipertahankan. Tidak menjanjikan terjemahan otomatis semua konten admin.
+
+**Validasi: 310 tes lokal lulus dan 27 modul runtime lolos pemeriksaan sintaks.** Tes mencakup akses, pembayaran berulang, status DM, pencarian, backup gagal, retry/notifikasi, serta ID komponen. Belum diuji pada Discord/Railway/provider milik pengguna; hasil lokal bukan jaminan tanpa error di layanan eksternal. Setelah deploy, buka menu baru dari /admin dan /shop; pesan lama tidak otomatis berubah. Uji invoice, DM tertutup, dan tujuan channel sebelum memakai transaksi nyata.
+
+### Channel informasi maintenance dan pengumuman
+
+Buka **/admin → Sistem → Data & Pemeliharaan → Maintenance → Channel Informasi**. Owner memilih **Atur Channel**, mengisi ID server/channel teks, lalu **Tes Channel**. Bot harus berada di server tujuan dan memiliki View Channel serta Send Messages. Channel informasi terpisah dari channel laporan pesanan. Pengaturan tidak memindahkan channel akses /shop.
+
+Setelah diaktifkan, perubahan maintenance benar-benar dari nonaktif menjadi aktif, atau sebaliknya, membuat satu pengumuman otomatis. Menekan tombol yang sama tidak membuat pengumuman kedua. Mengatur channel pertama kali tidak langsung mengirim status lama; gunakan Tes Channel. Admin aktif dapat membuat info lain lewat **Buat Pengumuman → Pratinjau → Kirim ke Channel**; hanya pembuat dapat mengonfirmasi dan pratinjau kedaluwarsa 15 menit. Isi pengumuman publik, jangan masukkan password, token, atau data akun pembeli. Mention @everyone/role/user tidak memicu notifikasi.
+
+Antrean tersimpan setelah restart, maksimal 20 menunggu dan 5 dikirim per putaran sekitar 30 detik. Kegagalan izin/koneksi dicoba lagi paling cepat satu menit. Antrean/Pernah Gagal ditampilkan di menu. Nonaktifkan Info menghentikan pengiriman; mengaktifkan lagi melanjutkan antrean. Mengganti tujuan membatalkan antrean/pratinjau lama agar tidak terkirim ke server baru. Admin yang dicabut aksesnya tidak dapat mengirim pengumuman yang masih menunggu. Riwayat terkirim/dibatalkan dibersihkan setelah 30 hari. Fitur ini mengikuti perubahan maintenance oleh admin, bukan pendeteksi otomatis ketika proses bot/Railway mati. Jika proses mati setelah Discord menerima pesan tetapi sebelum sukses tersimpan, pengiriman ulang masih mungkin.
+
+Bagian di bawah mencatat pembaruan sebelumnya; daftar file di bagian paling atas adalah daftar unggahan rilis ini.
+
+---
+
+## Laporan pesanan selesai ke channel tertentu — pembaruan terbaru
+
+**3 file runtime berubah:** index.js, admin.js, order-history.js. Unggah ketiganya jika rilis operasional sebelumnya sudah terpasang. Jika belum, gunakan seluruh 27 modul runtime dari ZIP lengkap. Tidak ada dependency atau Variables baru; pertahankan package.json, database, dan volume. Paket tetap 55 file.
+
+Buka **/admin → Laporan → Channel Pesanan Selesai → Atur Channel** sebagai owner. Isi ID server dan ID channel teks tujuan. Bot harus berada di server tersebut dan memiliki izin View Channel, Send Messages, Embed Links. Di iPhone, aktifkan Developer Mode Discord lalu salin ID server dan channel. Channel laporan terpisah dari channel akses pembelian; tidak mengubah izin /shop. Hanya owner dapat mengubah tujuan, menonaktifkan, melakukan tes, dan mengirim riwayat lama. Admin terdaftar dapat melihat ringkasan pengaturan.
+
+Pilih **Tes Channel** untuk memastikan pesan dapat dikirim. Pesanan baru yang selesai dilaporkan otomatis setiap sekitar 30 detik, maksimal 10 per putaran. OTP dianggap berhasil saat status provider OTP_RECEIVED atau COMPLETED; perubahan status berikutnya tidak menghasilkan laporan kedua. Produk digital otomatis maupun yang diselesaikan admin memakai status completed. OTP menggunakan saldo/QRIS hanya dilaporkan sekali dari pesanan, bukan sekali lagi dari invoice. Pembelian provider khusus owner/test, refund, pesanan dibatalkan, dan pembayaran belum selesai tidak dilaporkan. Tes kirim produk ke DM tidak membuat laporan penjualan.
+
+Isi laporan: username jika tersimpan, satu ID pembeli, nama produk/varian, jenis, harga produk, metode pembayaran, invoice/referensi saldo, status selesai, serta tanggal pesanan UTC. Harga adalah harga produk, bukan total tagihan beserta biaya gateway. Nomor telepon, OTP/SMS, akun, password, data produk, dan deskripsi tidak dikirim ke channel. Mention dinonaktifkan. Siapa pun yang dapat membaca channel tujuan dapat membaca ringkasan transaksi; gunakan channel sesuai kebutuhan privasi toko.
+
+Saat pertama diaktifkan, riwayat lama tidak dikirim otomatis. **Kirim Riwayat Lama** menampilkan konfirmasi lalu memasukkan semua pesanan selesai yang belum pernah dilaporkan. Proses berjalan bertahap; jumlah Antrean/Terkirim bisa dilihat lewat Perbarui. Pesanan selesai selama fitur dinonaktifkan akan menyusul setelah diaktifkan lagi. Mengganti channel tidak mengirim ulang laporan yang sudah berhasil ke channel lama. Antrean dan penanda terkirim tersimpan di database setelah restart. Kegagalan izin/kirim dicoba lagi paling cepat satu menit kemudian, tanpa mengubah saldo, stok atau pengiriman DM pembeli. Status selesai berarti pesanan sudah selesai pada database; DM pembeli yang gagal tetap ditangani lewat fitur retry DM tersendiri. Jika koneksi/proses terputus setelah Discord menerima pesan tetapi sebelum penanda sukses tersimpan, pengiriman ulang masih mungkin terjadi.
+
+**Validasi: 296 tes lokal lulus**, termasuk privasi laporan, akses owner/admin, tujuan salah, izin hilang, retry, restart, konkurensi, batas batch, riwayat lama, deduplikasi OTP/invoice, dan konfigurasi nonaktif. Belum diuji pada akun Discord/Railway pengguna. Setelah unggah dan deployment berhasil, buka /admin baru lalu atur tujuan.
+
+---
+
+## Pengembangan operasional terbaru — tanpa perpanjangan langganan
+
+**6 file runtime berubah:** index.js, manual-products.js, payments.js, shop-health.js, languages.js, navigation.js. Tidak ada dependency, modul runtime atau Variables baru. Jika rilis audit sebelumnya belum dipasang, gunakan seluruh 27 modul runtime dari paket lengkap. ZIP tetap 55 file: 27 runtime, 25 tes, 3 dokumentasi/contoh konfigurasi. Pertahankan package.json, database dan volume.
+
+### Antrean pengerjaan admin
+
+/admin → Pembayaran → Pesanan & Verifikasi → Pesanan Produk menyediakan **Semua**, **Antrean**, **Tugas Saya**. Pesanan menunggu admin diurutkan dari yang paling lama (tanggal pembuatan pesanan). Buka detail lalu **Ambil Pesanan**. Penanggung jawab tersimpan setelah restart. Admin lain tidak dapat menyelesaikan atau me-refund pesanan tersebut; tombolnya dinonaktifkan dan pemeriksaan transaksi tetap menolak tombol/form lama yang dicoba kembali. Penanggung jawab dapat **Lepas Penugasan**; owner juga dapat melepasnya untuk dipindahkan. Jika penanggung jawab sudah dicabut akses adminnya, admin aktif lain dapat mengambil pesanan. Penyelesaian pesanan yang belum diambil tetap menetapkan admin pelaksana. Pengambilan tidak mengubah saldo/stok, dan penugasan tidak mengubah status pesanan menjadi status tambahan.
+
+### Peringatan stok per produk/varian
+
+/admin → Toko → Produk Lainnya → Kelola Produk → pilih produk/varian → Data & Stok → **Peringatan Stok**. Batas 0–1.000.000, kosong = nonaktif (bawaan). Nilai 0 berarti beri tahu saat habis. Produk manual memakai stok jual yang diatur; stok yang belum diatur tidak dianggap nol. Produk otomatis memakai jumlah yang benar-benar bisa dikirim: minimum stok jual dan data tersedia, atau data tersedia jika stok jual mengikuti data. Peringatan dikirim ke DM admin aktif, tanpa akun/kode produk.
+
+Satu notifikasi berhasil per admin selama stok tetap pada/di bawah batas. Setelah pemeriksaan melihat stok di atas batas, notifikasi aktif lagi jika stok turun. Mengubah batas atau menonaktifkan/mengaktifkan produk juga mengawali siklus baru. Stok yang naik lalu turun sebelum pemeriksaan berikutnya mungkin tidak teramati sebagai siklus baru. Pemeriksaan mengikuti polling produk 30 detik, maksimal 10 konfigurasi dan 5 percobaan DM per putaran; toko besar dapat membutuhkan beberapa putaran. DM gagal dicoba lagi, tanpa menandainya berhasil. Ini peringatan admin; notifikasi stok tersedia kembali bagi pembeli yang sudah ada tetap terpisah.
+
+### Riwayat perubahan produk
+
+Kelola Produk → pilih produk/varian → Ubah Produk → **Riwayat Perubahan** → pilih **Perubahan #...**. Catat admin, waktu, nilai sebelum/sesudah nama, deskripsi, harga, modal, stok jual, status aktif, kirim otomatis, penghapusan dan batas peringatan. Penambahan/perubahan data hanya mencatat ID serta jumlah data, tidak isi akun/kode. Rekaman mulai sejak pembaruan, maksimal 300 catatan per produk. Pengubahan data yang sama tanpa perubahan tidak menambah catatan; pengiriman ulang form yang sama tidak menggandakan perubahan. Perubahan dan catatan dibatalkan bersama jika audit gagal. Penjualan/reservasi otomatis bukan pengubahan admin dan tetap memakai riwayat transaksi/stok asli. Pengaturan panduan/durasi/garansi tetap memakai fitur premium yang sudah ada; fitur ini tidak menambahkan perpanjangan.
+
+### Pengingat invoice
+
+Invoice TriPay **baru** menyimpan batas 20 menit yang diminta saat membuat tagihan. Dalam 5 menit terakhir, bot memeriksa status melalui API gateway dahulu, lalu mengirim satu pengingat berhasil ke DM pemilik invoice. Tidak membuat invoice baru, memotong saldo/stok, memberi refund, atau menyatakan gagal hanya karena waktu lewat. Invoice lunas, tidak aktif, tidak punya QR, sudah melewati waktu, atau tidak mempunyai batas tersimpan dilewati. Pemeriksaan mengikuti polling kesiapan toko tiap menit, maksimal 5 invoice per putaran. Kegagalan API/DM dicoba lagi paling cepat setelah satu menit selama masih dalam jendela pengingat. English mengikuti bahasa pembeli. DM yang tertutup tidak menghalangi pengecekan melalui Pesanan → Invoice di server toko.
+
+Invoice lama dan invoice Midtrans tanpa batas tersimpan **tidak menggunakan perkiraan kedaluwarsa** sehingga tidak diberi pengingat ini. Konfirmasi/pengecekan pembayaran lama tetap tersedia. Penanda pengingat dan penugasan tersimpan setelah restart; seperti pengiriman DM lain, koneksi terputus setelah pesan terkirim tetapi sebelum penanda tersimpan masih dapat menimbulkan pengiriman ulang.
+
+**Validasi rilis: 289 tes lokal lulus**, termasuk hak admin/owner, penugasan konflik, rollback, urutan antrean, privasi/retensi perubahan, notifikasi setelah restart, rearm stok, konkurensi polling, pembayaran yang lunas saat pemeriksaan, retry dan bahasa pengingat. Seluruh 27 modul lolos syntax check. Belum diuji pada akun Discord/Railway/provider pengguna. Unggah enam file di atas lalu buka /admin dan /shop baru setelah deployment berhasil.
+
+---
+
+## Pemeriksaan seluruh kode — rilis terbaru
+
+**Hasil: 27 modul runtime diperiksa, 277 tes lokal lulus.** Semua impor file lokal tersedia dan seluruh modul lolos syntax check. Pemindaian blok identik lintas modul tidak menemukan salinan persis enam baris berurutan sepanjang lebih dari 180 karakter; ini bukan bukti bahwa semua fungsi secara semantik bebas kemiripan.
+
+### Perbaikan dari pemeriksaan ini
+
+1. Menghapus tujuh implementasi handler yang tidak terpakai karena sudah ditangani modul lain: riwayat OTP lama di index, ringkasan Pesanan Saya lama di efficiency, riwayat QRIS lama di direct-payments, riwayat produk pembeli lama di manual-products, serta pembayaran bermasalah dan dua halaman owner provider lama di admin. Tombol lama tetap didukung oleh order-history, operations dan owner-provider; tidak menghapus transaksi/database.
+2. Memperbaiki baris kosong setelah penggabungan tombol Menu Awal Admin. Sebelum menu dikirim melalui navigasi utama, periksa ID duplikat (termasuk tombol nonaktif), panjang ID, batas baris/tombol, serta dropdown pada baris tersendiri. Jika menu tidak valid, hentikan pengiriman payload tersebut dan gunakan penanganan kesalahan; pemeriksaan ini tidak menyembunyikan duplikasi dengan mengganti ID sembarangan.
+3. Pemeriksaan origin dashboard mencakup seluruh /api, termasuk endpoint pesanan dan saldo. Callback gateway tetap pada jalur verifikasi tanda tangan yang dipasang sebelum session/origin guard, sehingga tidak memerlukan cookie browser.
+4. Menghapus helper smsFinish yang tidak digunakan. Logika pembelian/refund/garansi tetap pada modul masing-masing.
+
+### File untuk dipasang
+
+Jika sudah memasang rilis audit sebelumnya (yang menambahkan web-security.js), ganti **6 file kode**: index.js, admin.js, efficiency.js, direct-payments.js, manual-products.js, navigation.js. README.md dan CARA_PASANG.txt juga diperbarui. Tidak ada dependency atau modul runtime baru pada rilis ini.
+
+Jika belum memasang rilis audit sebelumnya, gabungkan daftar di atas dengan delapan file dari bagian berikutnya: total **12 file kode berbeda**. Untuk pemasangan paket penuh, gunakan semua **27 file .js runtime**, tanpa file *.test.js. Pertahankan package.json yang sudah digunakan. ZIP tetap berisi **55 file**: 27 runtime, 25 file tes, README.md, CARA_PASANG.txt, dan .env.example.
+
+### Cakupan dan batas pemeriksaan
+
+Tes mencakup katalog/paginasi, tombol/navigasi, registrasi /shop /admin /ping, hak owner/admin/pembeli, server/channel/role dan DM, bahasa, produk/varian/garansi, stok dan data unik, pembayaran saldo/QRIS, callback dan pemulihan invoice, refund, voucher, riwayat milik pembeli, bukti manual, tiket, backup, arsip pembeli, laporan dan keamanan dashboard. Handler pembayaran gateway, DM gagal dan produk pending mempunyai fungsi berbeda walau berada dalam kategori pemeriksaan yang sama.
+
+Klaim garansi dan pengingat masa aktif **sudah ada** dalam premium-products.js. Jangan menambah implementasi garansi kedua. Shortcut seperti Ringkasan menuju modul utama merupakan navigasi, bukan proses transaksi terpisah. Fungsi pembentuk tombol/format angka yang pendek pada modul berbeda masih dapat mirip; penyatuan seluruh helper kosmetik tidak diperlukan untuk mencegah transaksi ganda.
+
+Belum menguji login Discord, deployment Railway, pembayaran sungguhan atau pengiriman provider dengan akun pengguna. Konfigurasi token, domain webhook dan izin channel tetap perlu diuji sesudah deployment. Hasil lokal tidak menjamin provider/jaringan tidak pernah error. Jangan menghapus shop.db, volume atau Variables. Buka /admin dan /shop baru setelah deploy; pesan lama tidak otomatis ditulis ulang.
+
+---
+
+## Pembaruan terbaru: hasil audit dan perbaikan
+
+Ganti 7 file kode: index.js, payments.js, manual-products.js, shop-tools.js, smscode-webhook.js, languages.js, shop-health.js. Tambahkan web-security.js. Total 8 file kode untuk pembaruan ini, pada folder yang sama dengan package.json. Jangan hanya mengganti index.js karena file baru wajib tersedia. Tidak ada dependency baru atau kewajiban membuat package-lock.json. Paket lengkap berisi 55 file, termasuk 27 modul runtime, 25 file tes, dan 3 file dokumentasi/contoh konfigurasi. Pertahankan package.json yang sudah dipakai di repository.
+
+- Invoice TriPay yang ditolak secara pasti membebaskan stok produk satu kali. Timeout atau hasil yang belum pasti tetap menahan stok untuk mencegah pembayaran/penjualan ganda. /admin → Pembayaran → Pemeriksaan → Cocokkan Transaksi → Pulihkan Referensi TriPay menerima ID invoice bot dan referensi asli dari dashboard TriPay. Bot membaca status dari API gateway dan memeriksa identitas/nominal sebelum memprosesnya. Tidak membuat pembayaran baru. Jika gateway tidak menyediakan referensi, konfirmasikan ke provider dahulu; bot tidak menganggap timeout sebagai pembayaran gagal.
+- Tiket bantuan mengenali pesanan OTP, produk digital, serta invoice milik pembeli. Referensi milik pengguna lain tetap ditolak.
+- /admin → Sistem → Data & Pemeliharaan → Kesiapan Toko → Catatan Gangguan menyimpan maksimal 100 kelompok gangguan dengan kode, referensi dan jumlah kejadian. Tidak menyimpan pesan mentah, akun produk, OTP atau API key. Catatan baru dikumpulkan sejak pembaruan.
+- Tes dan konfigurasi webhook SMSCode menolak URL contoh domain-anda sebelum mengirim permintaan. Gunakan domain HTTPS publik bot Railway dengan path /webhooks/smscode, dan samakan URL/secret dengan SMSCode. Diagnosis 422 dapat menampilkan kode provider yang dikenali; ini membantu pemeriksaan, bukan menjamin webhook langsung berhasil.
+- Backup: owner dapat memilih Aktifkan Salinan DM di menu Backup lalu Backup Sekarang. Bawaan nonaktif. Salinan hanya dikirim ke owner yang masih berwenang; kegagalan dicoba lagi pada pemeriksaan berikutnya. Unduh file DM dan simpan aman. Pengiriman maksimal 8 MB. Jadwal dan penyimpanan tujuh backup lokal tetap tersedia; salinan pada volume yang sama tidak melindungi dari penghapusan volume.
+- Dashboard web hanya aktif jika SESSION_SECRET minimal 32 karakter dan ADMIN_PASSWORD minimal 12 karakter. Jika belum memenuhi, login dashboard mendapat 503; bot Discord dan endpoint webhook tetap berjalan. Cookie aman pada produksi/Railway, login dibatasi 10 percobaan per IP per 15 menit, sesi diganti setelah login. Perubahan melalui dashboard harus berasal dari origin yang sama; klien API dengan sesi admin juga perlu header Origin yang sesuai. Simpan rahasia di Variables Railway.
+- Padanan English ditambah untuk tombol dan pesan perbaikan ini. Teks admin/provider yang belum mempunyai padanan tetap asli.
+
+Validasi: 274 tes lokal lulus; syntax seluruh modul runtime diperiksa. Belum diuji langsung pada akun Discord/Railway/gateway pengguna. Unggah file terbaru, tunggu deployment berhasil, lalu buka pesan /admin atau /shop baru. Perbaikan registrasi /ping dari versi sebelumnya tetap disertakan; cari log Command Discord berhasil didaftarkan: /shop, /admin, /ping setelah restart.
+
+Panduan di bawah memuat riwayat pembaruan. Untuk daftar file pembaruan saat ini, gunakan daftar di bagian paling atas. Jangan menghapus shop.db, volume, atau Variables lama. Jangan mengunggah .env/credential.
+
+
+PERBAIKAN TERBARU — PENDAFTARAN /PING
+Ganti index.js terbaru. Jika admin.js terbaru belum diunggah, ganti juga admin.js. Bot mengambil Application ID dari token dan tidak lagi melewatkan pendaftaran jika DISCORD_CLIENT_ID kosong.
+Setelah deployment, cari log: Command Discord berhasil didaftarkan: /shop, /admin, /ping. Jika gagal, log menampilkan kode error tanpa token. 262 tes lokal lulus; belum diuji pada akun Discord Anda.
+
+PERBAIKAN TERBARU — ERROR SAAT MEMILIH VARIAN
+Ganti hanya manual-products.js jika pembaruan sebelumnya sudah terpasang. Tombol Pilih Varian yang berulang di detail varian dihapus; Kembali tetap menuju daftar varian.
+260 tes lokal lulus. Setelah deployment Railway berhasil, buka /shop dan pilih produk kembali untuk mendapatkan menu baru. Jangan hapus database atau volume.
+
+CATATAN PEMBARUAN SEBELUMNYA:
+
+PEMBARUAN PALING BARU — KEANDALAN TOKO DAN MODAL PRODUK
+Ganti 5 file kode: index.js, admin.js, languages.js, manual-products.js, shop-tools.js.
+Tambahkan 1 file baru: shop-health.js. TOTAL 6 FILE KODE UNTUK PEMBARUAN INI.
+README.md dan CARA_PASANG.txt hanya petunjuk; *.test.js tidak wajib diunggah untuk menjalankan bot.
+Jika paket sebelumnya belum diunggah, gunakan semua file kode terbaru dalam ZIP; tetap pertahankan package.json, package-lock.json dan database/volume Railway. Tidak ada dependency atau variable baru.
+
+MENU:
+1. /admin > Sistem > Data & Pemeliharaan > Kesiapan Toko: konfigurasi gateway/provider/webhook, izin channel, stok/data, backup dan catatan transaksi. Tes DM Admin tersedia.
+2. /admin > Pembayaran > Pemeriksaan > Pesanan Terlambat: peringatan admin otomatis setelah 15 menit, batas dapat diubah 5–1440 menit atau dimatikan.
+3. /admin > Pembayaran > Pemeriksaan > Cocokkan Transaksi: membaca ketidakcocokan catatan lokal tanpa mengubah saldo/refund/stok. Periksa mutasi/provider sebelum tindakan.
+4. /admin > Sistem > Data & Pemeliharaan > Backup > Tes Pemulihan: khusus owner, menguji salinan terpisah. Buat backup dulu jika belum ada. Database aktif tidak diganti.
+5. /admin > Toko > Produk Lainnya > Kelola Produk > pilih produk > Ubah Produk > Harga & Modal. Modal kosong = belum diketahui; 0 = modal nol. Snapshot pesanan lama tidak ikut berubah. Laporan/CSV memakai biaya yang diketahui dan menandai biaya yang belum lengkap.
+
+259 tes lokal lulus. Belum diuji langsung pada akun bot/gateway Anda. Tunggu deployment Railway berhasil, kemudian buka menu baru.
+
+CATATAN PEMBARUAN SEBELUMNYA:
+
+PEMBARUAN TERBARU — PANEL TOKO, DM GAGAL, LAPORAN GABUNGAN, CARI PESANAN, ENGLISH TRANSAKSI
+Ganti 8 file: index.js, admin.js, languages.js, manual-products.js, direct-payments.js, operations.js, order-history.js, shop-tools.js.
+Tambahkan 1 file baru: shop-improvements.js. TOTAL 9 FILE KODE.
+README.md dan CARA_PASANG.txt boleh ikut diganti; file *.test.js tidak diperlukan untuk menjalankan bot. package.json dan package-lock.json lama tetap dipakai, tidak ada dependency/variable baru.
+Simpan file kode pada folder yang sama di GitHub; tunggu Railway deployment berhasil, kemudian buka panel baru.
+1. Panel permanen: /admin > Sistem > Akses Bot > Panel Toko. Buka dari channel toko di server yang sudah disetujui, lalu Pasang / Perbarui Panel. Pembeli klik Mulai Belanja untuk memilih bahasa dan membuka toko privat tanpa /shop.
+2. DM Gagal: /admin > Pembayaran > Pemeriksaan > DM Gagal. Coba Ulang tidak membeli ulang atau memotong saldo/stok lagi. Pembeli perlu mengaktifkan DM jika tertutup.
+3. Laporan: Hari Ini / Bulan Ini mencakup OTP dan produk digital yang sudah dibayar, termasuk ekspor CSV. Selisih belum termasuk modal produk digital/hosting.
+4. Cari Pesanan: Pesanan > Riwayat Pesanan / Invoice / Riwayat OTP > Cari Pesanan. Invoice, nama produk, tanggal WIB YYYY-MM-DD; hasil hanya milik pembeli tersebut.
+5. English: konfirmasi, status produk, rincian invoice dan notifikasi hasil/OTP mengikuti bahasa pengguna. Nama/deskripsi/akun/kode/OTP tidak diterjemahkan.
+Jangan hapus volume/database Railway. Paket lengkap berisi seluruh kode terbaru; gunakan semuanya jika ada pembaruan lama yang belum diunggah. Belum diuji langsung pada akun Discord, Railway, atau gateway Anda.
+
+CATATAN PEMBARUAN SEBELUMNYA (untuk rujukan):
+
+PILIH BAHASA SEBELUM BELANJA: Ganti index.js dan languages.js (2 file). Pengguna tanpa pilihan tersimpan melihat Bahasa Indonesia / English sebelum menu belanja. Setelah memilih, menu toko langsung dibuka privat. Pengguna lama tetap memakai bahasa tersimpan. Jika pembaruan bahasa sebelumnya belum diunggah, ganti juga admin.js: total 3 file. 240 tes lokal lulus; belum diuji live.
+
+FITUR BAHASA: Ganti index.js dan admin.js; tambahkan languages.js (3 file runtime). Buka /shop atau /admin lalu Bahasa / Language → English / Bahasa Indonesia. Bahasa tersimpan per pengguna pada database yang sama. Tidak perlu variable baru atau API penerjemah. Saldo, stok, harga, nama/deskripsi produk dan data akun/OTP tetap asli. Menu dan teks umum mempunyai terjemahan; teks yang belum diterjemahkan tetap Indonesia. 239 tes lokal lulus; belum diuji live. Jika kedua pembaruan sebelumnya belum diunggah, total gabungannya 9 file runtime, termasuk languages.js.
+
+NAVIGASI LANJUTAN: Ganti admin.js, manual-products.js, store-features.js, operations.js, shop-tools.js (5 file). Kembali menuju kategori asal, petunjuk riwayat pesanan disesuaikan. Jika pembaruan pencarian, filter, antrean dan /ping sebelumnya belum diunggah, ganti juga index.js, navigation.js, premium-products.js: total 8 file runtime untuk kedua pembaruan.
+
+PEMBARUAN TERBARU: Ganti index.js, admin.js, navigation.js, manual-products.js, premium-products.js (5 file runtime). Ditambahkan /ping khusus admin, pencarian produk/varian, filter klaim garansi dan jumlah antrean pada tombol admin. Buka panel baru setelah deployment. 234 tes lokal lulus; belum diuji live.
+
+HASIL PEMERIKSAAN MENU: Ganti admin.js, navigation.js, manual-products.js. Pembayaran dikelompokkan menjadi Pesanan & Verifikasi / Pemeriksaan / Riwayat & Petunjuk. Pilihan pengguna tetap abu-abu, Kembali dari varian menuju daftar varian. Buka panel baru setelah deploy.
+
+MENU PRODUK LEBIH RINGKAS: Ganti manual-products.js dan premium-products.js. Detail produk: Ubah Produk / Data & Stok / Pengaturan. Varian, panduan, dan garansi pindah ke Pengaturan. Buka ulang Kelola Produk untuk melihat menu baru; pesan lama tidak otomatis berubah.
+
+FITUR PRODUK PREMIUM: Ganti index.js, admin.js, manual-products.js, order-history.js; tambahkan premium-products.js. Total 5 file runtime untuk pembaruan ini. Pengaturan: Admin > Toko > Produk Lainnya > Kelola Produk > pilih produk > Ubah Produk > Varian, Panduan & Garansi. Varian baru stok 0: atur harga, stok, data dan kirim otomatis sebelum dijual. Klaim: Admin > Toko > Produk Lainnya > Klaim Garansi. Database otomatis diperbarui, jangan hapus volume.
+
+PEMBARUAN FOOTER: Ganti index.js untuk menampilkan est. 2020 — Bot Otomatis 24/7. Setelah deploy Railway selesai, buka /shop kembali.
+
+PEMBARUAN TERBARU: Ganti admin.js, buyer-management.js, dan smscode-webhook.js. Kelola Pembeli mengelompokkan Pengguna Bot/Saldo/Cari dengan tombol abu-abu. Owner dan admin tidak bisa dihapus. Tes webhook menampilkan diagnostik aman; setelah deploy, tes ulang dan kirim pesan error barunya (jangan kirim token/secret).
+
+PEMBARUAN: PING DAN KECEPATAN BOT
+Buka /admin > Sistem > Data & Pemeliharaan > Ping & Kecepatan Bot. Tes Ulang memperbarui heartbeat Discord, waktu respons awal, akses database, RAM proses, uptime. Khusus admin, privat, tidak membeli atau memanggil provider.
+Bersama fitur Kelola Pembeli/Arsip, upload 3 file runtime: index.js, admin.js, buyer-management.js. Tidak perlu variabel baru.
+
+PEMBARUAN: HAPUS PEMBELI DAN ARSIP OTOMATIS 30 HARI
+Upload/ganti 3 file runtime: index.js, admin.js, buyer-management.js (baru). buyer-profiles.js terbaru dari pembaruan sebelumnya tetap digunakan.
+Buka /admin > Pembeli > Kelola Pembeli. Aktif/Arsip/Dihapus, arsip manual, pulihkan, dan hapus dari daftar khusus owner dengan konfirmasi. Hapus hanya saldo 0 dan tanpa proses tertunda; riwayat tidak dihapus.
+Arsip otomatis untuk SEMUA akun pembeli setelah 30 hari tidak memakai bot, termasuk saldo nonzero atau transaksi tertunda: tidak mengubah uang, proses transaksi, ataupun riwayat. Akun aktif kembali otomatis saat interaksi bot berikutnya dan hitungan 30 hari diulang. Aktivitas membaca profil/admin lookup/callback bukan aktivitas pembeli.
+Akun lama mulai dihitung dari saat pemasangan; cek arsip saat startup dan tiap jam maksimal 100 akun. Daftar Saldo hanya akun aktif, saldo arsip tersedia pada Kelola Pembeli > Arsip. Tidak perlu variabel baru; tetap memakai volume/database lama.
+
+PEMBARUAN: DAFTAR SALDO TANPA ID BERULANG
+Ganti admin.js dan buyer-profiles.js. Tunggu Railway selesai deploy lalu buka /admin baru > Pembeli > Daftar Saldo.
+Username dan ID tampil sekali, ringkasan total saldo/jumlah akun/akun memiliki saldo ditambahkan. Filter Semua Akun, Memiliki Saldo, Saldo Nol; Perbarui dan halaman mempertahankan filter. Tidak perlu variabel tambahan atau menghapus data.
+
+PEMBARUAN: FITUR PEMBELI DAN RINGKASAN ADMIN
+Ganti 4 file runtime: index.js, manual-products.js, order-history.js, efficiency.js.
+Tunggu Railway selesai deploy, lalu buka panel /shop atau /admin baru.
+- Beli Lagi produk digital: Pesanan > Riwayat Pesanan > Detail > Beli Lagi. Harga terbaru; tetap perlu konfirmasi pembayaran. OTP tetap memakai Beli Lagi yang sudah ada.
+- Panduan Pembeli Baru: Bantuan > Panduan Pembeli Baru.
+- Pratinjau Pesan: Admin > Toko > Produk Lainnya > Kelola Produk > produk > Ubah Produk > Data Produk > Pratinjau Pesan. Pribadi admin, menampilkan contoh data yang tersedia tanpa mengirim DM, mengurangi stok, atau mencatat penjualan. Dapat dipakai sebelum produk diaktifkan.
+- Ringkasan: Admin > Ringkasan. Tambahan pesanan produk menunggu admin, pesanan selesai dengan DM belum terkirim, dan produk aktif dengan stok jual atau data otomatis <=3. Klik Segarkan untuk angka terbaru. DM belum terkirim mencakup antrean baru dan kegagalan kirim; bukan hanya DM gagal. Tidak menampilkan isi data produk.
+Tidak perlu variabel Railway tambahan. Simpan DB_PATH=/data/shop.db dan volume yang sudah ada. Tes lokal saja; belum diuji di akun live atau dideploy dari sini.
+
+PEMBARUAN: MENU SISTEM LEBIH RINGKAS
+Ganti admin.js di GitHub dari ZIP terbaru. Setelah Railway deploy, buka /admin baru > Sistem.
+Menu Sistem hanya berisi 3 kategori:
+- Akses Bot: Admin Toko, Server & Channel (termasuk role).
+- Provider & Webhook: Saldo Provider (Owner), Beli OTP Provider (Owner), Tes Webhook SMSCode, Peringatan Saldo.
+- Data & Pemeliharaan: Backup (Owner), Aktivitas Admin, Maintenance.
+Setiap kategori memiliki Kembali ke Sistem. Semua handler/izin owner dan data yang tersimpan tetap berlaku.
+Path saldo/beli/tes provider terbaru: /admin > Sistem > Provider & Webhook.
+Path izin server/role terbaru: /admin > Sistem > Akses Bot > Server & Channel.
+Tidak perlu variabel atau migrasi tambahan. Menu lama pada pesan terdahulu tidak otomatis berubah; gunakan /admin baru.
+Validasi: 21 pengujian admin dan navigasi lokal lulus, termasuk semua aksi tetap terjangkau, izin, dan batas tombol Discord.
+
+PEMBARUAN: SALDO PROVIDER DAN PEMBELIAN KHUSUS OWNER
+Upload/ganti 8 file: index.js, admin.js, commerce.js, purchase-flow.js, operations.js, efficiency.js, shop-tools.js, owner-provider.js (baru).
+Setelah Railway deploy, buka /admin > Sistem > Beli OTP Provider (Owner) atau Saldo Provider (Owner).
+Saldo SMSCode hanya dapat dilihat owner terdaftar. Admin biasa ditolak; ringkasan admin tidak membocorkan saldo; DM peringatan saldo SMSCode hanya dikirim kepada owner.
+Pilih OTP untuk Dibeli > aplikasi > negara > operator > produk > Beli Pakai Saldo Provider (Owner).
+Konfirmasi menampilkan biaya dasar provider. Setelah menekan Konfirmasi — Bayar Saldo Provider, bot membeli nomor dengan saldo SMSCode langsung. Saldo akun pembeli tidak dipotong, tidak memerlukan saldo bot/QRIS, dan tidak memakai markup toko.
+Pembelian memakai nomor sungguhan, sehingga tetap mengurangi saldo SMSCode. Harga berubah menyebabkan order dibatalkan menurut aturan yang ada; konfirmasi kedaluwarsa setelah 5 menit dan tidak dapat dipakai ulang.
+Nomor tersedia pada respons owner; Cek OTP/Batalkan memakai alur biasa. Webhook/polling mengirim OTP ke DM owner yang membeli.
+Pesanan berlabel [OWNER] dan tercatat pada riwayat owner; is_owner_test=1 disimpan pada SQLite. Pembelian owner dikecualikan dari laporan penjualan pelanggan/CSV. Biaya provider tetap tersimpan untuk riwayat, saldo pelanggan tetap aman.
+Pembatalan owner tidak menambahkan saldo pembeli karena nominal pembayaran bot 0. Pengembalian saldo provider mengikuti aturan SMSCode.
+Owner ditentukan oleh OWNER_DISCORD_IDS; jika belum diisi, ID awal ADMIN_DISCORD_IDS menjadi owner sesuai perilaku sebelumnya. Admin tambahan melalui bot bukan owner.
+Tidak perlu variabel baru. Volume/database lama tetap dipakai dan kolom tambahan dibuat otomatis. Pembaruan ini menggantikan tes pembelian admin berbayar saldo bot sebelumnya; admin biasa tetap dapat membeli lewat /shop seperti pelanggan.
+Validasi: 69 pengujian lokal pembelian, owner access, menu, laporan, dan operasi lulus. Belum diuji dengan pembelian live pada akun pengguna.
+
+PEMBARUAN: TES PEMBELIAN OTP UNTUK ADMIN
+Ganti admin.js di GitHub. Tunggu Railway deploy, buka /admin > Sistem > Tes Pembelian OTP > Mulai Tes Pembelian OTP.
+Menu hanya dapat dibuka admin terdaftar, menampilkan penjelasan biaya secara privat, lalu memakai alur pembelian OTP biasa. Menekan tombol awal belum membuat order/memotong saldo.
+Pilih aplikasi, negara, operator, produk, lalu konfirmasi harga dan metode pembayaran. Transaksi sungguhan memakai saldo akun admin atau QRIS yang sudah aktif; saldo provider SMSCode juga harus cukup.
+Setelah nomor dibeli, minta SMS pada layanan yang dipilih. OTP diperbarui melalui webhook SMSCode atau polling cadangan lalu dikirim ke DM akun admin pembeli. Order tercatat pada riwayat biasa.
+Fitur ini bukan sandbox/tes gratis dan tidak melewati kontrol harga/pembayaran. Jika saldo admin belum cukup, isi saldo seperti biasa. Pembatalan/refund mengikuti aturan OTP yang sudah ada.
+Untuk menguji endpoint tanpa membeli nomor, pilih Tes Webhook SMSCode. Memastikan webhook aktif memerlukan variables/pendaftaran pada panduan di bawah.
+Validasi: 30 pengujian menu admin, pembelian, dan pilihan provider lokal lulus. Belum dilakukan pembelian live di akun pengguna.
+
+PEMBARUAN: TOMBOL TES WEBHOOK SMSCODE
+Ganti index.js, admin.js, dan smscode-webhook.js di GitHub. operations.js dari pembaruan webhook sebelumnya tetap diperlukan jika belum diupload.
+Tunggu Railway deploy lalu buka /admin > Sistem > Tes Webhook SMSCode.
+Hanya admin toko terdaftar dapat menjalankan. Hasil bersifat privat. Tombol membaca konfigurasi SMSCode, mencocokkan URL dan secret Railway, lalu memanggil POST /webhook/test.
+HTTP 200 berarti tes koneksi endpoint berhasil; ini bukan bukti pesanan/OTP asli telah dikirim. Tes tidak membeli nomor, membuat order, atau mengubah saldo/konfigurasi SMSCode.
+Tes dibatasi satu kali per menit untuk semua admin agar tidak melewati rate limit provider.
+Jika variables belum lengkap, URL/secret tidak cocok, atau HTTP bukan 200, bot menampilkan petunjuk perbaikan tanpa membocorkan token/secret.
+SMSCODE_WEBHOOK_URL, SMSCODE_WEBHOOK_SECRET, SMSCODE_API_TOKEN harus sudah diisi. Untuk mendaftarkan URL/secret pertama kali, jalankan node smscode-webhook.js pada Console Railway.
+Validasi: 17 pengujian webhook dan menu admin lokal lulus; sintaks index.js lulus. Tes ke akun SMSCode pengguna belum dilakukan.
+
+PEMBARUAN: WEBHOOK SMSCODE OTP
+Upload/ganti 3 file di GitHub: index.js, operations.js, smscode-webhook.js (file baru). Tidak perlu dependency npm tambahan.
+Jika fitur role/server terakhir belum dipasang, gunakan juga server-access.js, admin.js, staff.js dari ZIP.
+
+PENGATURAN RAILWAY
+1. Pastikan service mempunyai domain publik HTTPS (Public Networking). Endpoint webhook: https://DOMAIN-RAILWAY-ANDA/webhooks/smscode
+2. Pada Variables, tambahkan SMSCODE_WEBHOOK_URL dengan URL endpoint tersebut.
+3. Tambahkan SMSCODE_WEBHOOK_SECRET dengan secret acak yang kuat. API token SMSCODE_API_TOKEN tetap yang sudah ada.
+   Untuk membuat secret, gunakan Console Railway: node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+   Salin hasil ke SMSCODE_WEBHOOK_SECRET. Jangan bagikan secret/token atau masukkan .env ke GitHub.
+4. Tunggu deployment terbaru aktif dengan Variables tersebut, lalu buka Console service dan jalankan:
+   node smscode-webhook.js
+   Perintah ini mendaftarkan URL dan secret ke SMSCode melalui PATCH /webhook, lalu menjalankan POST /webhook/test.
+   Pesan sukses: Webhook SMSCode tersimpan dan tes HTTP 200 berhasil.
+   Jika tes bukan 200, periksa domain publik, deployment, serta secret. Perintah dapat dijalankan ulang setelah memperbaikinya.
+   Ulangi perintah jika domain atau secret berubah. Jangan mengubah Start Command Railway; tetap gunakan Start Command bot yang sudah ada.
+
+CARA KERJA
+Endpoint memeriksa X-Webhook-Signature sha256=HMAC(raw body, webhook_secret), menyimpan antrean sebelum memberi HTTP 200, dan memeriksa order terbaru lewat API token SMSCode.
+Event order.otp_received/order.completed/order.expired/order.canceled memicu pembaruan order lokal dan pengiriman OTP/SMS ke DM pembeli sesuai order yang tercatat.
+Payload webhook tidak dapat memilih pembeli, membuat order, memotong/mengisi saldo, atau memicu refund. Aturan refund bot yang sudah ada tetap berlaku.
+Antrean gagal/DM tertutup dicoba ulang; notifikasi berulang tidak mengirim ulang kode yang sama. Antrean/notifikasi yang diterima disimpan di SQLite pada volume; entri webhook dibersihkan setelah 48 jam.
+Polling 15 detik tetap berjalan sebagai cadangan karena SMSCode memakai timeout 3 detik tanpa retries. Tidak ada klaim pengiriman persis sekali bila proses mati di antara pengiriman DM dan pencatatan hasil.
+Validasi: 21 pengujian operasi dan webhook lokal lulus, termasuk signature, duplikat, restart, status terminal, SMS tanpa kode, revisi lama, dan konfigurasi/test API tiruan. Belum didaftarkan pada akun SMSCode pengguna atau diuji live.
+Dokumentasi resmi: https://smscode.gg/docs (Webhook Notifications dan GET/PATCH/POST /webhook).
+
+PEMBARUAN: ROLE KHUSUS BOT DAN AKSES ADMIN DI MANA PUN
+Ganti server-access.js dan index.js di GitHub. Jika belum memasang kategori Server & Channel, ganti admin.js dan staff.js dari ZIP ini juga.
+Setelah Railway deploy, buka /admin > Sistem > Server & Channel > Kelola Server & Channel > pilih server > Atur Role Bot.
+Buat role anggota khusus di Discord (misalnya Pengguna Bot), salin ID role menggunakan Developer Mode, lalu masukkan ID pada formulir. Berikan role tersebut kepada pembeli yang diizinkan.
+Isi 0 untuk menghapus pembatasan role. Bot tidak membuat/membagikan role secara otomatis. Role @everyone dan role yang dikelola integrasi tidak diterima.
+Pembeli harus memenuhi izin server, channel, dan role. Pemeriksaan berlaku untuk command, tombol, dan formulir sebelum proses transaksi. Role yang dihapus dari pembeli langsung membatasi interaksi berikutnya.
+Admin toko yang sudah terdaftar boleh memakai /shop beserta tombol/form toko di channel mana pun, server lain tempat bot tersedia, dan DM. Admin melewati pembatasan server/channel/role. Ketika akses admin dicabut, aturan pembeli berlaku kembali.
+Pengaturan role per server tersimpan pada database di volume Railway. Tidak ada variabel tambahan. Saldo dan hak admin tetap global.
+Validasi: 35 pengujian akses, menu admin, dan navigasi lulus. Pemeriksaan sintaks lulus. Belum diuji pada bot Discord yang berjalan.
+
+PEMBARUAN: KATEGORI SERVER & CHANNEL
+Ganti index.js, admin.js, staff.js, dan server-access.js di GitHub dari ZIP ini. Tunggu Railway deploy, lalu buka /admin baru.
+Buka Sistem > Server & Channel > Kelola Server & Channel > pilih server > Atur Channel.
+Masukkan ID channel teks/pengumuman pada server tersebut. Isi 0 untuk mengizinkan semua channel.
+Aktifkan Developer Mode pada pengaturan Discord untuk menyalin ID channel.
+Server tetap harus disetujui. Pembeli di channel lain akan diarahkan ke channel yang ditetapkan; command, tombol, dan formulir diblokir sebelum transaksi.
+Aturan berlaku untuk satu channel per server. Thread tidak otomatis mendapat izin dari channel induk.
+Server lama mengizinkan semua channel sampai admin mengatur channel tertentu. Pengaturan tersimpan pada database SQLite di volume Railway.
+Admin Toko adalah kategori terpisah untuk owner mengelola akun admin. Kontak Admin Server tersedia pada kategori Server & Channel; owner harus membuka menu dari server terkait untuk mengaturnya.
+Admin dapat memakai menu pengelolaan dari server atau DM. Pembeli tetap hanya melalui server; pengiriman data pesanan ke DM tetap berjalan.
+Pengaturan ini tidak memisahkan saldo/database atau hak admin per server. Tidak perlu variabel Railway tambahan.
+Validasi: 23 pengujian akses dan menu admin lulus; pemeriksaan sintaks file yang diubah lulus.
+
+PEMBARUAN: MENU DM HANYA ADMIN
+Ganti server-access.js di GitHub dari ZIP ini. Tunggu Railway deploy.
+Pembeli hanya dapat membuka menu, membeli, cek saldo, isi saldo, melihat riwayat, dan mengirim formulir melalui server Discord yang disetujui.
+Semua interaksi command/tombol/form di DM pembeli diblokir sebelum proses transaksi. Pesan mengarahkan ke /shop pada server.
+Admin toko dan owner tetap boleh menggunakan bot di DM; admin yang dicabut aksesnya langsung ikut diblokir.
+Pengiriman akun/kode/OTP dan pemberitahuan pesanan ke DM pembeli tetap berjalan. Tombol dalam DM tersebut harus digunakan melalui menu di server oleh pembeli.
+Aturan izin server yang sudah ada tetap berlaku. Tidak ada perubahan saldo/data pesanan atau variabel Railway.
+Validasi: 11 pengujian akses lulus.
+
+PEMBARUAN: STOK JUAL DIPINDAHKAN KE DATA PRODUK
+Ganti manual-products.js di GitHub dari ZIP ini. Untuk tombol Data Produk #... abu-abu, gunakan navigation.js terbaru juga.
+Tunggu Railway deploy lalu buka /admin > Toko > Produk Lainnya > Kelola Produk > pilih produk > Ubah Produk.
+Ubah Produk kini mengubah nama dan deskripsi saja; harga tetap melalui Atur Harga Jual.
+Data Produk memiliki Tambah Data Produk dan Atur Stok Jual. Atur Stok Jual membuka formulir jumlah stok saja dan kembali ke Data Produk setelah disimpan.
+Jumlah stok jual tetap angka tersendiri dari akun/kode siap kirim. Mengatur stok tidak menciptakan data akun, dan menambah data tidak mengubah jumlah stok jual.
+Form Tambah Produk tetap memiliki stok awal. Data tersimpan/pesanan tetap aman; tidak ada migrasi database tambahan.
+Validasi: 41 pengujian produk manual dan navigasi lulus.
+
+PEMBARUAN: WARNA TOMBOL DATA PRODUK
+Ganti navigation.js di GitHub. Tunggu Railway deploy lalu buka /admin pada pesan baru.
+Semua tombol Data Produk #... berwarna abu-abu (Secondary) dan tetap aktif/dapat diklik.
+Tambah Data Produk tetap hijau; Kembali dan Menu Awal Admin tetap biru.
+Validasi: 9 pengujian navigasi lulus dan pemeriksaan langsung memastikan Data Produk abu-abu aktif.
+
+PEMBARUAN: HAPUS RIWAYAT DI KATALOG PRODUK MANUAL
+Ganti manual-products.js di GitHub dari ZIP ini. Tunggu Railway deploy lalu buka /shop > Produk Lainnya pada pesan baru.
+Tombol Riwayat Pesanan di katalog pembeli dihapus. Tombol nama produk, halaman, Kembali, dan Menu Awal tetap tersedia.
+Riwayat tetap ada melalui Pesanan pada menu awal. Data transaksi tidak dihapus. Tambah Produk pada katalog admin tetap tersedia.
+Validasi: 31 pengujian produk manual lulus.
+
+PEMBARUAN: HAPUS TOMBOL CATAT BIAYA GATEWAY
+Ganti admin.js dan shop-tools.js di GitHub. Tunggu Railway selesai deploy lalu buka /admin lagi.
+Tombol Catat Biaya Gateway di menu Laporan, laporan harian/bulanan, dan riwayat biaya dihapus.
+Riwayat Biaya Gateway, Ubah Catatan, Hapus Catatan, perhitungan laporan, dan data yang sudah tersimpan tetap tersedia.
+Pesan bot lama tidak otomatis berubah. Gunakan menu baru setelah deploy.
+Validasi: 19 pengujian admin/laporan lulus.
+
+PEMBARUAN: KELOLA CATATAN BIAYA GATEWAY
+Ganti admin.js dan shop-tools.js di GitHub dari ZIP ini, tunggu Railway selesai deploy, buka /admin lagi.
+Laporan > Riwayat Biaya Gateway > Kelola Catatan > Ubah Catatan / Hapus Catatan.
+Daftar menampilkan biaya manual terbaru per invoice, total catatan, total biaya manual, invoice, nilai tagihan, gateway, catatan, admin pencatat, dan waktu UTC. Tersedia halaman sebelumnya/berikutnya.
+Ubah Catatan membuka nominal dan catatan lama. Invoice tidak diubah. Mengisi Catat Biaya Gateway untuk invoice sama memperbarui koreksi terakhir, bukan menambah biaya ganda.
+Hapus Catatan meminta konfirmasi. Yang dihapus hanya koreksi biaya manual. Invoice, pembayaran, saldo, dan pesanan tidak dihapus/direfund.
+Setelah koreksi dihapus, laporan kembali memakai fee_merchant otomatis dari gateway jika tersedia; jika tidak, biaya ditandai belum tercatat.
+Riwayat ini bukan daftar seluruh pembayaran dan tidak memuat semua versi perubahan; aktivitas ubah/hapus tetap dicatat di Aktivitas Admin.
+Akses hanya admin toko, balasan privat. Data dan migrasi disimpan di database pada volume yang sudah dipasang.
+Validasi: 19 pengujian admin/laporan lulus, sintaks shop-tools.js valid. Belum diuji pada bot live.
+
+PEMBARUAN: KONTAK ADMIN TERPISAH PER SERVER
+Ganti staff.js, index.js, payments.js, dan manual-products.js di GitHub. Jika pembaruan riwayat belum dipasang, pastikan order-history.js juga sudah ada.
+Tunggu Railway deploy. Dari server yang ingin diatur: /admin > Sistem > Izin & Admin > Kontak Admin Server.
+Owner mengisi ID Discord admin toko yang akan dihubungi pembeli di server tersebut. Tambahkan dahulu akun melalui Admin Toko jika belum terdaftar.
+Ulangi di setiap server. Kontak tersimpan di database SQLite pada volume yang sudah dipasang.
+Tombol Hubungi Admin untuk saldo kurang dan isi saldo manual memakai kontak server saat ini, bukan kontak server lain.
+Server tanpa kontak tidak memakai admin server lain sebagai cadangan. DM bot tanpa konteks server memakai owner toko pertama.
+Ini pemisahan KONTAK saja. Saldo pembeli, data transaksi, hak akses admin, petunjuk pembayaran umum, dan notifikasi pengajuan tetap mengikuti sistem toko yang sudah ada; bukan isolasi database/peran admin per server.
+Admin yang dicabut hak aksesnya tidak lagi ditampilkan sebagai kontak. Owner perlu memilih kontak pengganti.
+Tombol membuka profil/DM Discord; izin privasi akun tetap berlaku. Tidak otomatis mengirim pesan kepada admin.
+Validasi: 56 pengujian akses, produk manual, dan pembayaran lulus. Sintaks index.js/staff.js valid. Belum diuji pada bot live.
+
+PEMBARUAN: RIWAYAT PEMBELI DAN HUBUNGI OWNER
+Ganti index.js, manual-products.js, dan order-history.js di GitHub dari ZIP ini.
+Tunggu Railway selesai deploy, lalu buka /shop pada pesan baru.
+Tombol Pesanan Manual di pesan error pembeli dihapus; riwayat manual lama diarahkan ke Riwayat Pesanan gabungan.
+Panel admin tetap memiliki antrian pesanan manual.
+Saat saldo pembeli tidak cukup untuk produk manual atau OTP saldo, tombol Hubungi Owner membuka profil/DM owner.
+Owner mengikuti OWNER_DISCORD_IDS, atau ADMIN_DISCORD_IDS jika OWNER_DISCORD_IDS kosong. Jika beberapa owner, tautan menuju owner pertama dalam daftar staff. Jika owner belum diatur, tidak ada tautan yang salah ke admin lain.
+Discord dapat membuka profil owner terlebih dahulu; pilih Kirim Pesan untuk DM. Izin privasi Discord tetap berlaku.
+Bot tidak mengirim pesan ke owner secara otomatis dan saldo tidak berubah saat pembelian gagal.
+Validasi: 33 pengujian produk manual dan riwayat pesanan lulus; sintaks index.js valid. Belum diuji pada bot live.
+
+PEMBARUAN: TES BELI ADMIN
+Ganti manual-products.js dari ZIP ini di GitHub. Tunggu Railway selesai deploy lalu buka /admin lagi.
+Admin > Toko > Produk Lainnya > Kelola Produk > pilih produk > Tes Beli.
+Tes Beli menampilkan harga, stok jual, jumlah data tersedia, dan metode pembayaran yang dikonfigurasi.
+Kirim Tes ke DM Saya mengirim contoh data produk pertama yang siap kirim ke admin yang menekan tombol, dengan label TES ADMIN.
+Ini simulasi pengiriman: tidak membuat invoice gateway, tidak membayar QRIS, tidak memotong saldo/stok, dan tidak mencatat penjualan. Tes ini tidak memvalidasi pembayaran gateway nyata.
+Produk harus aktif, pengiriman otomatis aktif, stok jual tersedia, data siap kirim tersedia, dan toko tidak maintenance untuk mengirim tes.
+Kalau DM ditutup, bot menampilkan kegagalan dan tombol coba lagi. Akun/data yang diuji tetap tersedia untuk pembeli.
+Akses pembeli ditolak sebelum membaca data.
+Validasi: 29 pengujian produk manual lulus.
+
+PEMBARUAN: RIWAYAT PESANAN PEMBELI DISATUKAN
+Ganti index.js dan manual-products.js, serta tambahkan file baru order-history.js di GitHub dari ZIP ini.
+Tunggu Railway selesai deployment, lalu buka /shop > Pesanan pada pesan baru.
+Tidak perlu variabel Railway atau dependency tambahan.
+
+Khusus PEMBELI:
+- Pesanan langsung menampilkan riwayat semua pembelian OTP dan produk digital.
+- Invoice menampilkan invoice QRIS dan bukti transaksi saldo internal toko.
+- Riwayat OTP merupakan filter OTP dari riwayat yang sama; pesanan OTP aktif ikut tampil dan memiliki Cek OTP di detail.
+- Pesanan QRIS OTP yang sudah membuat nomor hanya tampil sekali, dengan invoice terhubung.
+- Tagihan QRIS pembelian yang belum selesai tetap tampil agar bisa dilanjutkan.
+- Detail berisi nama produk, harga, status, metode pembayaran, tanggal UTC, dan invoice/bukti transaksi. Data produk hanya ditampilkan pada pesanan selesai milik pembeli tersebut.
+- Isi saldo bukan pembelian produk sehingga tidak masuk daftar ini.
+
+ADMIN: kategori, antrian pesanan manual, riwayat pembayaran, dan laporan tetap sama.
+Riwayat lama langsung dibaca dari database, tidak dihapus atau dipindah. Jangan upload database atau data akun ke GitHub.
+File order-history.test.js hanya untuk pengujian lokal; runtime membutuhkan order-history.js.
+Validasi: 178 pengujian lokal lulus. Belum diuji pada bot live atau transaksi nyata.
+
+PEMBARUAN: DAFTAR PRODUK HANYA NAMA
+Ganti manual-products.js di GitHub, tunggu Railway selesai deploy, lalu buka menu baru.
+Tombol daftar produk hanya menampilkan nama, tanpa harga atau status.
+Harga tetap tersedia di detail produk dan konfirmasi sebelum pembayaran.
+Validasi: 27 pengujian produk manual lulus.
+
+PEMBARUAN: TOMBOL DATA PRODUK
+Ganti manual-products.js di GitHub, tunggu Railway selesai deploy, lalu buka /admin pada pesan baru.
+Ubah Produk kini hanya menampilkan ringkasan singkat, Ubah Produk & Stok Jual, Data Produk, Hapus Produk, dan navigasi.
+Tombol Data #... dan Tambah Data DM tidak tampil pada halaman Ubah Produk.
+Tekan Data Produk untuk menambah atau mengubah akun/kode unik yang tersedia. Data yang sudah dialokasikan atau terjual tidak ditampilkan dalam daftar ini.
+Data tersimpan tidak dihapus; jumlah stok jual tetap terpisah dari jumlah data siap kirim.
+Validasi: 36 pengujian produk manual dan navigasi lulus.
+
+PEMBARUAN: STOK JUAL TERPISAH DARI DATA DM UNIK
+Ganti manual-products.js di GitHub dari ZIP ini. Tunggu deployment Railway selesai lalu buka /admin lagi.
+Tidak perlu variabel Railway atau dependency tambahan; kolom database ditambahkan otomatis.
+
+Admin > Toko > Produk Lainnya > Kelola Produk > pilih produk > Ubah Produk:
+- Ubah Produk & Stok Jual: nama, jumlah stok jual tersedia (angka), dan deskripsi.
+- Tambah Data DM: satu akun, kode, atau tautan unik untuk satu pembeli.
+- Tekan Data #... untuk mengubah data DM yang belum dialokasikan atau terjual.
+- Stok jual dan Data DM Siap Kirim tampil sebagai angka berbeda. Menambah data DM tidak menambah stok jual; mengubah stok jual tidak membuat data akun.
+- Harga jual diatur di detail produk. Aktifkan Kirim Otomatis untuk pengiriman otomatis data unik.
+- Form Tambah Produk memiliki kolom stok jual dan data DM terpisah.
+
+Produk lama: data tetap tersimpan. Buka Ubah Produk & Stok Jual lalu simpan jumlah stok tersedia untuk memakai stok jual angka terpisah. Sebelum disimpan, produk lama mempertahankan perilaku sebelumnya.
+Untuk stok jual 5, siapkan 5 data DM unik bila semua pembelian ingin dikirim otomatis. Kalau data DM habis, pembelian otomatis baru ditolak tanpa memotong saldo.
+QRIS mengalokasikan satu stok jual dan satu data saat tagihan dibuat agar tidak dijual ganda. Setelah pembayaran terverifikasi, data dikirim ke DM. Pembayaran kedaluwarsa/gagal yang telah diverifikasi mengembalikan alokasi; gangguan jaringan tidak dianggap gagal bayar.
+Refund pesanan manual yang belum selesai mengembalikan stok jual dan saldo satu kali. Produk otomatis yang telah selesai tidak bisa direfund lewat menu ini.
+Jika DM pembeli tertutup, data tetap tersimpan pada pesanan pribadinya dan bot mencoba mengirim kembali.
+Validasi: 174 pengujian lokal lulus; belum diuji dengan pembayaran nyata atau bot live.
+
+PEMBARUAN: TAMBAH PRODUK HANYA DI KELOLA PRODUK
+Ganti admin.js dari ZIP ini di GitHub. Buka /admin lagi setelah deployment Railway selesai.
+Kategori Produk Lainnya hanya menampilkan Kelola Produk dan navigasi.
+Tambah Produk tersedia di Admin > Toko > Produk Lainnya > Kelola Produk > Tambah Produk.
+Jika pembaruan stok dan warna sebelumnya belum dipasang, ganti manual-products.js dan navigation.js juga dari ZIP ini.
+Validasi: 32 pengujian admin dan produk manual lulus.
+
+PEMBARUAN: STOK DISATUKAN DI UBAH PRODUK
+Ganti manual-products.js dari ZIP ini di GitHub. Setelah Railway deploy, buka /admin pada pesan baru.
+Tombol Kelola Stok Tersimpan dan halaman Stok Data Produk terpisah dihapus dari alur baru.
+Di Ubah Produk, daftar data stok sekarang langsung tampil bersama deskripsi produk.
+Tekan Ubah Data & Tambah Stok untuk menambah satu unit data; tekan Data #... yang tersedia untuk mengubah unit tersimpan.
+Data yang dialokasikan atau terjual tidak dapat diubah. Stok tersimpan tetap dipertahankan.
+Validasi: 31 pengujian produk manual dan navigasi lulus.
+
+PEMBARUAN: WARNA TOMBOL KEMBALI
+Ganti navigation.js dari ZIP ini di GitHub, tunggu Railway selesai deploy, lalu buka /admin atau /shop lagi.
+Tombol Kembali kini tetap biru walaupun menuju detail produk. Pilihan produk tetap abu-abu, aksi hapus tetap merah, dan pembayaran tetap hijau.
+Pesan menu lama tidak otomatis berubah; buka pesan baru.
+Validasi: 31 pengujian navigasi dan produk manual lulus.
+
+PEMBARUAN: KATEGORI TOKO ADMIN
+Ganti admin.js, manual-products.js, dan shop-tools.js di GitHub dari ZIP ini.
+Tunggu deployment Railway selesai, lalu buka /admin > Toko pada pesan baru.
+
+Toko sekarang memiliki 3 kategori:
+1. OTP Provider > Lihat Layanan / Atur Harga OTP.
+2. Produk Lainnya > Kelola Produk / Tambah Produk.
+   Kelola Produk > pilih produk > Ubah Produk: data, stok, dan Hapus Produk.
+   Atur Harga Jual dan status aktif tersedia pada detail produk.
+3. Promo > Kelola Voucher.
+
+Kembali pada kategori menuju Toko; Kembali pada daftar produk admin menuju Produk Lainnya. Menu Awal Admin tetap menuju panel admin.
+Tidak perlu variabel Railway atau dependency baru.
+Validasi: 169 pengujian lokal lulus. Belum diuji pada bot live.
+
+PEMBARUAN: PRODUK MANUAL DAN TOMBOL KEMBALI
+Ganti manual-products.js dan index.js di GitHub dengan file dari ZIP ini.
+Tunggu deployment Railway selesai lalu buka menu baru.
+Tidak perlu menambah variabel Railway atau dependency untuk pembaruan ini.
+
+- Tambah Produk: kolom Data Kirim Otomatis berada di atas deskripsi. Isi satu unit data untuk mengaktifkan pengiriman otomatis; kosongkan untuk diproses admin.
+- Hapus produk: Admin > Toko > Produk Manual > pilih produk > Ubah Produk > Hapus Produk > konfirmasi.
+- Riwayat pesanan tetap tersimpan. Tagihan QRIS yang sudah dibuat tetap dapat diselesaikan.
+- Kembali tersedia di daftar produk, detail, stok dan pesanan manual. Daftar produk pembeli kembali ke shop; daftar produk admin kembali ke kategori toko. Menu Awal admin tetap menuju panel admin.
+- Formulir Discord menggunakan tombol tutup bawaan; Kembali tersedia pada pesan menu.
+
+Validasi lokal: 169 pengujian lulus. Belum diuji pada bot live atau pembayaran nyata.
+
+TAMBAH PRODUK SEKALIGUS DATA KIRIM OTOMATIS — UPDATE TERBARU
+
+Cukup ganti manual-products.js dari ZIP ini di GitHub. Commit changes, tunggu Railway berhasil, tutup formulir lama dan buka Tambah Produk lagi.
+Form Tambah Produk kini memiliki urutan: Nama Produk → Data Kirim Otomatis (opsional, satu unit) → Deskripsi → Harga Jual.
+Jika kolom data diisi, produk dibuat dengan satu stok dan mode Kirim Otomatis langsung aktif. Data hanya dikirim setelah pembayaran terverifikasi (QRIS) atau saldo berhasil dipotong. Data tidak ditampilkan di deskripsi publik. Kolom kosong membuat produk tetap diproses admin secara manual.
+Satu pengisian data = satu unit untuk satu pembeli. Untuk stok berikutnya gunakan Ubah Produk → Ubah Data & Tambah Stok / Kelola Stok Tersimpan. Data produk lama tetap tersimpan.
+166 tes lokal lulus; belum diuji di bot aktif Anda.
+
+---------------------------------------------------------------------
+
+FOOTER TERBARU
+
+Teks bawah menu awal menjadi since 2020 • Andri Store. Cukup ganti index.js dari ZIP ini di GitHub, lalu Commit changes. Setelah Railway berhasil, buka /shop kembali untuk melihat teks baru. Judul awal dan deskripsi tetap.
+
+---------------------------------------------------------------------
+
+MENU PRODUK, BUKTI BUTTON, COMMAND & FOOTER — UPDATE TERBARU
+
+Ganti 4 file runtime di GitHub: index.js, manual-products.js, efficiency.js, payments.js. Commit changes, tunggu Railway berhasil lalu buka /shop dan /admin kembali. Tidak ada runtime baru atau Variables baru. Jangan menghapus database/volume /data.
+
+STOK TERGABUNG KE UBAH PRODUK
+Admin → Toko → Produk Manual → pilih produk → Ubah Produk.
+Ringkasan stok berada di atas deskripsi. Ubah Data & Tambah Stok membuka formulir dengan urutan Nama Produk, Tambah Stok Data (opsional), Deskripsi.
+Satu pengisian stok = satu unit untuk satu pembeli. Kolom kosong tidak menambah/menghapus stok. Jangan masukkan banyak unit yang ingin dijual terpisah ke satu kolom. Data yang dimasukkan tidak menjadi deskripsi publik.
+Kelola Stok Tersimpan berada dalam Ubah Produk untuk mengubah data yang masih tersedia. Data yang dialokasikan/terjual tetap tidak dapat diedit. Simpan produk dan tambahan stok dilakukan bersamaan; pengiriman ulang form yang sama tidak menambah stok dua kali.
+Aktifkan Kirim Otomatis tetap tersedia di detail produk. Pengiriman QRIS/saldo, harga dan data lama tetap digunakan.
+
+BUKTI PEMBAYARAN MELALUI BUTTON
+Pembeli → Isi Saldo → Manual → Kirim Bukti Pembayaran.
+Bot membuka formulir nominal, gambar bukti, dan catatan. Formulir tidak menambah saldo langsung; admin tetap harus memeriksa pembayaran dan menyetujui pengajuan. Bukti PNG/JPG/WebP maksimum 8 MB, satu gambar per pengajuan. QRIS otomatis tidak memakai persetujuan dari gambar bukti; gateway tetap menjadi sumber verifikasi.
+Untuk upload gambar langsung di formulir, gunakan discord.js versi 14.25.0 atau versi kompatibel yang mendukung ModalSubmitFields.getUploadedFiles. Di package.json, ubah hanya nilai dependency discord.js menjadi:
+"discord.js": "^14.25.0"
+Pertahankan dependency lain, scripts, dan tanda koma JSON yang sesuai. Jika package-lock.json mengunci versi lama, perbarui lockfile melalui npm install discord.js@^14.25.0 agar paket yang terpasang sesuai. Jangan menimpa seluruh package.json dengan satu baris di atas.
+Jika library Discord.js yang terpasang belum mendukung upload modal, tombol tetap membuka formulir nominal, tautan gambar bukti Discord, dan catatan. Upload gambar ke Discord, salin tautan gambar dan isi formulir. Tidak perlu /bukti. Alternatif tautan juga tersedia jika form upload gagal dibuka.
+Dokumentasi resmi: https://discord.js.org/docs/packages/discord.js/14.25.0/ModalSubmitFields:Class dan https://docs.discord.com/developers/components/reference
+
+COMMAND DAN TAMPILAN
+Versi ini hanya mendaftarkan /shop dan /admin. /bukti dan command global lain diganti saat startup melalui registrasi command. DISCORD_CLIENT_ID dan DISCORD_TOKEN harus benar. Daftar command pada aplikasi Discord bisa masih memakai cache; buka ulang aplikasi/server setelah bot online. Command khusus server yang dibuat aplikasi lain tidak dihapus oleh versi ini.
+Judul awal tetap Hi, Belanja Produk Digital Yukk.
+Deskripsi tetap Selamat datang di Produk Digital by Maboyy.
+Footer/identitas di bawah embed berubah menjadi Since 2020. Nama akun bot di Discord Developer Portal tidak diubah.
+164 tes lokal lulus. Upload modal Discord dan pembayaran nyata belum diuji di bot aktif Anda.
+
+---------------------------------------------------------------------
+
+QRIS PRODUK LAINNYA + PENGIRIMAN DATA OTOMATIS — UPDATE TERBARU
+
+Ganti 8 file runtime di GitHub: index.js, manual-products.js, efficiency.js, admin.js, purchase-flow.js, operations.js, payments.js, server-access.js. Gunakan file dari ZIP ini. Tidak ada file runtime tambahan atau dependency baru. Pertahankan Variables pembayaran, volume /data, DB_PATH dan package.json yang sudah benar. Cadangkan database sebelum update. Commit changes, tunggu Railway berhasil lalu buka /shop dan /admin lagi.
+
+Nama tampilan toko: Hi, Belanja Produk Digital Yukk
+Deskripsi awal: Selamat datang di Produk Digital by Maboyy
+Tombol awal tetap Produk Lainnya di samping Beli OTP. Perubahan ini mengubah pesan/menu toko, bukan nama akun bot di Discord Developer Portal.
+
+CARA MENYIAPKAN PRODUK OTOMATIS
+1. /admin → Toko → Produk Manual → pilih produk atau Tambah Produk.
+2. Pilih Stok Data → Tambah Data. Isi SATU unit data untuk SATU pembelian, maksimal 1000 karakter. Data boleh berisi beberapa baris. Ulangi Tambah Data untuk setiap unit stok. Contoh: satu kode lisensi atau satu data pengiriman untuk satu pembeli. Jangan memasukkan banyak unit dalam satu kolom jika harus dijual terpisah.
+3. Data stok yang masih tersedia bisa diubah dari daftar Stok Data. Stok yang sudah dialokasikan untuk tagihan atau sudah terjual tidak dapat diubah lewat menu ini.
+4. Kembali ke detail produk → Aktifkan Kirim Otomatis. Mode ini memerlukan stok tersedia. Saat stok habis, pembelian baru ditolak. Tambahkan stok untuk melanjutkan penjualan.
+5. Harga dan deskripsi tetap diatur lewat Ubah Data / Atur Harga Jual.
+
+ALUR PEMBELI
+/shop → Produk Lainnya → pilih produk → Beli Produk → Bayar QRIS → isi email → pindai QRIS → pembayaran terverifikasi → data dikirim melalui DM.
+Bayar Saldo tetap tersedia. Mode otomatis juga mengirim data setelah saldo berhasil dipotong.
+Satu unit stok dialokasikan ketika tagihan QRIS dibuat. Status masih Menunggu pembayaran; data belum terlihat oleh pembeli. Setelah gateway mengonfirmasi pembayaran lunas dengan nominal dan identitas yang sesuai, satu unit data masuk ke pesanan pribadi dan bot mencoba mengirim DM. Data tidak dipublikasikan ke channel server.
+Jika DM tertutup, buka Pesanan → Pesanan Manual → pilih pesanan. Cek QRIS & Pesanan dan Tagihan Aktif juga tersedia. Bot mencoba ulang DM yang gagal setiap 30 detik; pembayaran dan alokasi data tetap satu kali. Proses restart tepat sesudah DM terkirim bisa menyebabkan DM yang sama dikirim ulang, tetapi tidak mengalokasikan unit data tambahan.
+
+GATEWAY DAN KETENTUAN
+Menggunakan PAYMENT_GATEWAY yang sudah aktif (tripay atau midtrans). Tidak ada Variables baru. Gateway dan endpoint callback yang lama tetap dipakai. QRIS minimum harga produk 1.000 IDR; harga di bawahnya dibayar menggunakan saldo. Minimal isi saldo tetap 5.000 IDR.
+Gateway harus terkonfigurasi dan QRIS aktif. Callback harus mencapai domain publik Railway; jika callback terlambat, bot memeriksa tagihan secara berkala, maksimum lima pesanan per putaran 30 detik. Pengecekan status bisa dilakukan pembeli. Mode sandbox menampilkan MODE UJI dan harus memakai simulator gateway, bukan pembayaran nyata.
+Jika koneksi gagal setelah tagihan dibuat, jangan membayar ulang. Pesanan dan stok tetap dialokasikan sampai status gateway diketahui. Stok dikembalikan ke tersedia hanya setelah gateway memastikan tagihan gagal/dibatalkan/kedaluwarsa dan belum lunas; bukan berdasarkan waktu lokal atau dugaan timeout.
+Produk yang tidak memakai Kirim Otomatis tetap menerima QRIS tetapi menunggu diproses admin. Refund pesanan yang masih menunggu admin mengembalikan harga produk ke saldo bot satu kali, bukan rekening QRIS; biaya QRIS tidak dikembalikan otomatis. Pesanan yang sudah mengirim data otomatis tidak bisa direfund dari tombol Batalkan & Refund.
+Data, stok, tagihan dan hasil pengiriman tersimpan di shop.db pada volume, serta termasuk dalam backup database. Jangan upload database, backup atau data stok pribadi ke GitHub. Produk/pesanan lama tetap disimpan; produk lama tetap pada mode diproses admin sampai Kirim Otomatis diaktifkan.
+Laporan OTP belum menggabungkan omzet/biaya Produk Lainnya. Periksa pesanan produk ini pada Admin → Pembayaran → Pesanan Produk Manual.
+160 tes lokal lulus, termasuk integrasi TriPay/Midtrans menggunakan respons gateway tiruan. Belum ada pembayaran nyata atau pengujian bot aktif di akun Anda.
+
+---------------------------------------------------------------------
+
+TULISAN TOMBOL MENU AWAL — UPDATE TERBARU
+
+Tombol Produk Manual pada tampilan awal /shop menjadi Produk Lainnya. Untuk pembaruan ini cukup ganti index.js, lalu Commit changes dan tunggu Railway berhasil. Buka /shop kembali untuk melihat tombol baru. Alur pembelian dan data tetap memakai fitur produk manual sebelumnya.
+
+---------------------------------------------------------------------
+
+PRODUK MANUAL — UPDATE TERBARU
+
+Tambahkan manual-products.js di folder utama GitHub. Ganti index.js, admin.js, navigation.js, efficiency.js, dan shop-tools.js dengan versi dari ZIP ini. Jangan mengganti package.json atau menghapus volume/database. Tidak ada dependency atau Variables baru. Commit changes lalu tunggu deployment Railway berhasil. Buka /shop dan /admin lagi; tombol pada pesan lama tidak otomatis berubah.
+
+MENU PEMBELI
+/Shop → Produk Manual, tombol berada di samping Beli OTP.
+Pilih produk → Beli dengan Saldo → Konfirmasi Bayar Saldo → Menunggu Admin.
+Pesanan → Pesanan Manual juga dapat dibuka dari menu Produk Manual.
+Isi saldo QRIS/manual tetap tersedia dari menu Isi Saldo. Pembelian produk manual saat ini dibayar menggunakan saldo, belum QRIS langsung.
+
+MENU ADMIN
+/Admin → Toko → Produk Manual → Tambah Produk.
+Isi nama produk, deskripsi/cara pengiriman/perkiraan waktu proses, dan harga jual rupiah tanpa titik, contoh 15000. Produk baru langsung aktif. Nonaktifkan jika belum siap dijual.
+Pilih produk untuk Ubah Data, Atur Harga Jual, atau Aktifkan/Nonaktifkan. Harga manual adalah harga tetap per produk; markup Harga OTP Provider tidak diterapkan pada produk manual.
+/Admin → Pembayaran → Pesanan Produk Manual → Pilih Pesanan → Kirim / Selesaikan. Isi hasil atau keterangan pengiriman. Hasil tersimpan pribadi untuk pembeli, dan bot mencoba mengirim DM. Jika DM tertutup, pembeli tetap bisa membacanya di Pesanan Manual.
+Batalkan & Refund memerlukan konfirmasi admin; saldo harga produk dikembalikan satu kali. Hanya pesanan yang masih menunggu dapat dibatalkan. Pesanan yang sudah selesai tidak dapat dibatalkan dari menu ini.
+
+Produk manual disimpan terpisah dari katalog SMSCode dan katalog lokal lama. Tidak ada produk contoh yang otomatis dijual. Data produk, pesanan, hasil pengiriman, saldo dan riwayat disimpan di database yang sama pada volume /data; backup database mencakup semuanya.
+Harga/data pesanan yang sudah dibayar tetap memakai snapshot saat pembelian. Perubahan sebelum pembayaran membuat konfirmasi ditolak; pembeli harus memilih kembali. Konfirmasi berlaku 15 menit. Pembelian baru diblokir saat maintenance. Tombol pembeli tidak dapat membaca pesanan akun lain atau menjalankan tindakan admin.
+Laporan OTP yang lama belum menggabungkan omzet/biaya produk manual. Pesanan manual dapat diperiksa melalui menu khusus; tidak ada perhitungan laba manual pada update ini.
+152 tes lokal lulus. Bot aktif dan pengiriman Discord nyata belum diuji di akun Anda.
+Runtime kini 18 file .js; file *.test.js dan panduan tidak wajib diupload. Untuk instalasi baru, gunakan seluruh 18 runtime; untuk update dari versi username sebelumnya, cukup file baru dan 5 file pengganti di atas.
+
+---------------------------------------------------------------------
+
+USERNAME DISCORD PADA TRANSAKSI — UPDATE TERBARU
+
+Tambahkan buyer-profiles.js di folder utama GitHub. Ganti index.js, navigation.js, admin.js, operations.js, store-features.js, shop-tools.js, dan direct-payments.js dengan versi dari ZIP ini. Commit changes lalu tunggu Railway berhasil. Buka menu baru setelah deployment. Variables, volume dan saldo tetap dipakai. Tidak perlu dependency tambahan.
+
+Tampilan contoh: Pembeli: @nama.discord • ID: 123456789012345678
+Username terlihat pada pembelian saldo/QRIS, cek pembayaran, pengajuan isi saldo manual, riwayat transaksi admin, daftar saldo/cari pembeli, detail tiket dan notifikasi transaksi. Tampilan transaksi pembeli bersifat pribadi; menu shop publik tidak menampilkan identitas transaksi.
+Nama terakhir yang diketahui disimpan dalam buyer_profiles di database yang sama. Nama diperbarui saat pengguna berinteraksi. Ini bukan snapshot nama pada tanggal setiap transaksi; riwayat memakai nama terakhir tersimpan. ID Discord tetap satu-satunya kunci saldo/pesanan. Username berubah tidak membuat akun/saldo baru.
+Untuk pembeli lama yang namanya belum tersimpan, beberapa menu admin mencoba membaca profil Discord, maksimal 10 ID berbeda per tampilan dan batas tunggu 3 detik. Jika profil tidak dapat dibaca, ID tetap ditampilkan dengan keterangan username belum tersedia. Tidak perlu mengetik username manual atau memasukkannya ke Variables.
+145 tes lokal lulus. Belum diuji melalui bot aktif Anda.
+Jumlah runtime sekarang 17 file .js (16 sebelumnya ditambah buyer-profiles.js). Semua file runtime harus di folder yang sama dengan package.json. File *.test.js dan panduan tidak wajib dipasang.
+
+---------------------------------------------------------------------
+
+PERBAIKAN TERBARU — MENU AWAL ADMIN TERPISAH
+
+Cukup ganti navigation.js di GitHub dengan file dari ZIP ini, lalu Commit changes. Tunggu Railway berhasil dan buka /admin lagi. Tidak perlu mengganti Variables atau volume.
+Menu admin, unduh backup, laporan CSV, pesan hasil/error admin dan katalog provider admin sekarang memiliki tombol Menu Awal Admin menuju panel admin. Menu pembeli tetap menuju shop. Tombol admin tetap memerlukan izin admin.
+Pesan lama masih memiliki tombol lama; buka ulang menu atau unduh backup lagi setelah deployment untuk mendapatkan tombol baru.
+140 tes lokal lulus, termasuk pemisahan menu pembeli/admin, respons file-only, batas komponen, keunikan ID dan penolakan akses pembeli ke admin.
+
+---------------------------------------------------------------------
+
+PAKET TERBARU — 7 FITUR TAMBAHAN DAN ADMIN LEBIH RAPI
+
+CARA UPDATE DI IPHONE
+1. Unduh dan ekstrak ZIP. Cadangkan database sebelum update melalui fasilitas backup/unduh Railway yang tersedia. Jangan menghapus volume /data.
+2. Upload seluruh 16 file runtime .js di bawah ke folder utama repository GitHub (folder yang sama dengan package.json). Timpa file lama dan Commit changes. Pertahankan package.json/dependency yang sudah ada; tidak perlu npm baru.
+index.js, admin.js, purchase-flow.js, payments.js, pricing.js, commerce.js,
+direct-payments.js, operations.js, server-access.js, staff.js, navigation.js,
+store-features.js, efficiency.js, midtrans.js, coupons.js, shop-tools.js.
+Dua file baru adalah coupons.js dan shop-tools.js. File *.test.js hanya untuk pengujian, tidak wajib dipasang untuk menjalankan bot.
+3. Jangan upload .env, API key, token, shop.db, database backup atau bukti pribadi ke GitHub. .env.example hanya contoh konfigurasi.
+4. Pertahankan Variables gateway, token, owner/admin yang sudah benar. Volume harus tetap terpasang /data dan database berada di volume (misalnya DB_PATH=/data/shop.db). Tidak ada Variables wajib baru untuk fitur ini.
+5. Tunggu deployment Railway sukses. Jalankan /shop dan /admin lagi agar menu baru muncul. Pesan lama tidak otomatis berubah semua.
+
+MENU ADMIN — HANYA 5 KATEGORI
+Toko: katalog provider, produk manual, harga jual, voucher.
+Pembeli: daftar saldo, cari pembeli, tambah saldo, riwayat saldo manual, tiket bantuan.
+Pembayaran: pengajuan manual, kasus perlu diperiksa, cek topup tertunda, riwayat isi saldo/QRIS beli, petunjuk manual.
+Laporan: hari ini, bulan ini, biaya gateway aktual, ekspor CSV pada masing-masing laporan.
+Sistem: izin server/admin, maintenance, backup owner, aktivitas admin, koneksi provider, peringatan saldo provider.
+
+1. BACKUP DATABASE
+Backup pertama saat bot aktif, kemudian sekali per hari WIB; penjadwal memeriksa setiap jam. Tujuh salinan terbaru disimpan di folder backups di samping database, misalnya /data/backups. Opsional BACKUP_DIR=/data/backups.
+Sistem > Backup (Owner): jalankan sekarang, aktif/nonaktif jadwal, unduh backup terakhir (maksimal 8 MB lewat Discord). Hanya owner dapat mengakses database lengkap. Admin tambahan tidak dapat mengunduhnya.
+Backup di volume yang sama tetap hilang jika volume dihapus. Unduh dan simpan terpisah atau aktifkan backup volume Railway. Pastikan ruang volume cukup untuk database ditambah tujuh backup. Jangan bagikan database ke channel publik/GitHub.
+Tidak ada tombol restore otomatis. Pemulihan dilakukan ketika bot berhenti, setelah menyalin database saat ini dan memeriksa semua pembayaran yang terjadi sesudah tanggal backup; pemulihan sembarangan bisa mengulang pencatatan saldo.
+
+2. CEK PEMBAYARAN TERTUNDA OTOMATIS
+Topup diperiksa maksimal 5 tagihan per batch setiap 30 detik. Pembelian QRIS memiliki pemeriksaan tersendiri. Saldo/pesanan hanya diproses oleh pemeriksaan gateway resmi yang sudah ada. Tidak membuat tagihan pengganti saat timeout/hasil belum pasti. Tombol Pembayaran > Cek Topup Tertunda menjalankan satu batch tambahan. Tagihan lama mengikuti gateway dan mode saat dibuat.
+Notifikasi isi saldo sukses dikirim lewat DM; jika DM tertutup, pembeli tetap dapat memeriksa Saldo. QRIS tetap memerlukan merchant dan konfigurasi gateway yang valid.
+
+3. TIKET BANTUAN
+Pembeli: Bantuan > Buat Tiket Bantuan / Tiket Saya. Referensi pesanan opsional hanya boleh milik pembeli tersebut. Maksimal 3 tiket terbuka per pembeli, pesan maksimal 1000 karakter.
+Admin: Pembeli > Tiket Bantuan, pilih tiket untuk membalas atau menutup dengan alasan. Tampilan menampilkan 5 pesan terakhir dengan ringkasan jika panjang; teks lengkap tetap disimpan. Notifikasi DM dicoba ulang jika gagal. Semua percakapan menu pribadi.
+
+4. RIWAYAT AKTIVITAS ADMIN
+Sistem > Aktivitas Admin menggabungkan tindakan toko, saldo manual, resolusi pembayaran, pengaturan, akses admin/server, voucher, tiket, backup dan biaya gateway. Tampilan per 5 kegiatan dan pesan panjang diringkas. Riwayat ini pencatatan aplikasi, bukan rekaman yang tahan perubahan oleh pemilik database.
+
+5. LAPORAN BIAYA DAN CSV
+Laporan hari/bulan memakai WIB, menampilkan penjualan setelah diskon, diskon voucher, refund, penjualan net, biaya provider tercatat, biaya gateway tercatat dan biaya yang belum tercatat. Ekspor CSV berupa ringkasan periode.
+Angka selisih bersifat sementara, belum termasuk hosting/biaya lain. Biaya gateway diakui pada periode pembayaran seluruh topup/pembelian; bukan alokasi biaya per pesanan. Refund ditampilkan menurut tanggal order. Transaksi lama tanpa paid_at memakai tanggal tagihan.
+Biaya Midtrans yang belum diberikan API ditandai belum tercatat, bukan dianggap gratis. Masukkan biaya merchant aktual dari mutasi di Laporan > Catat Biaya Gateway. Isi 0 hanya bila memang bebas biaya. Biaya TriPay tercatat mengikuti informasi gateway; koreksi manual disertai catatan.
+
+6. NOTIFIKASI STOK FAVORIT
+Beli OTP > Favorit Saya > pilih favorit > Notifikasi Stok On/Off. Notifikasi DM dikirim saat stok kombinasi aplikasi/negara/operator tersedia; tidak memesan nomor otomatis. Jika stok sudah ada saat diaktifkan, notifikasi pertama tetap dikirim.
+Maksimal 5 favorit diperiksa per menit secara bergilir; cache katalog dan jumlah pelanggan dapat menambah waktu tunggu. Pemberitahuan berikutnya dikirim setelah stok sempat kosong lalu tersedia lagi. Jika DM ditutup, pemberitahuan dicoba lagi.
+
+7. VOUCHER DISKON RUPIAH
+Toko > Voucher > Buat Voucher. Isi kode, diskon nominal rupiah, minimum pembelian, tanggal kedaluwarsa YYYY-MM-DD (sampai akhir hari WIB), dan batas total penggunaan. Setiap pembeli hanya sekali per kode. Tekan voucher pada daftar untuk menonaktifkan/mengaktifkan.
+Pembeli memakai tombol Gunakan Voucher di konfirmasi produk, lalu membayar lewat saldo atau QRIS. Gunakan konfirmasi terbaru untuk melihat nominal setelah diskon. Diskon tidak boleh membuat harga di bawah biaya provider. Voucher divalidasi ulang saat pembayaran. QRIS minimal harga produk 1000 IDR; gunakan saldo untuk nominal lebih kecil.
+Tagihan tertunda menahan kuota voucher. Kuota dilepas hanya setelah status tagihan tidak aktif yang sudah diverifikasi dan belum dibayar; timeout tidak melepas kuota. Pembatalan/refund pesanan mengembalikan harga yang benar-benar dibayar ke saldo bot, dan tidak mengembalikan hak voucher yang sudah dipakai.
+
+PENGUJIAN
+138 tes lokal lulus untuk fungsi baru dan seluruh fitur sebelumnya. Backup hasil tes berhasil dibuka kembali. Voucher saldo/QRIS, refund nominal diskon, kepemilikan tiket, peran admin/owner, retry pembayaran/DM, batas Discord, dan laporan WIB diuji. Belum diuji melalui bot aktif, Railway atau merchant Anda; file belum otomatis dipasang ke GitHub.
+
+Panduan terdahulu di bawah sebagai referensi. Bila instruksi upload file lama berbeda, ikuti 16 file runtime pada bagian paling atas ini.
+---------------------------------------------------------------------
+
+WARNA SUBMENU TERBARU
+
+Jika versi terbaru sudah dipasang: cukup ganti navigation.js di GitHub, Commit changes, tunggu deployment Railway sukses, lalu jalankan /shop atau /admin lagi. Tombol pesan lama tidak berubah sebelum bot mengirim/memperbarui menu. Variables dan volume /data tidak perlu diubah.
+
+- Abu-abu: pilihan aplikasi, negara, operator dan produk/harga provider.
+- Biru: submenu toko dan navigasi, termasuk Menu Awal, Kembali, Sebelumnya/Berikutnya, pencarian dan favorit.
+- Hijau: pembayaran, cek saldo, cek pembayaran, Cek OTP dan aksi persetujuan.
+- Merah: pembatalan, hapus, penolakan, pencabutan akses dan aksi refund.
+Tombol yang dinonaktifkan tetap tidak dapat diklik. Tombol tautan tetap mengikuti gaya tautan Discord. Warna ditentukan dari fungsi tombol, bukan status berhasil/gagal suatu transaksi. Perubahan hanya pada tampilan tombol; ID, batas komponen, privasi, data dan alur pembayaran tetap sama.
+
+124 tes lokal lulus, termasuk warna provider/navigasi, keutuhan ID tombol, batas baris, tidak menggandakan Menu Awal, dan seluruh fitur sebelumnya. Belum diuji pada aplikasi Discord aktif Anda. Integrasi Midtrans tetap tersedia dalam paket ini; bila belum dipasang, ikuti panduan Midtrans berikut.
+
+---------------------------------------------------------------------
+
+INTEGRASI TERBARU — MIDTRANS QRIS UNTUK ISI SALDO DAN BELI LANGSUNG
+
+PEMASANGAN FILE
+Cadangkan database terlebih dahulu. Ganti payments.js, direct-payments.js, operations.js, dan efficiency.js di GitHub. Tambahkan midtrans.js di folder yang sama dengan index.js. File lain versi sebelumnya tetap dipakai. Tidak perlu dependency baru. Jangan upload Server Key, token, database atau file .env ke GitHub. .env.example hanya contoh kosong. Volume /data dan saldo lama tetap digunakan.
+
+VARIABLES RAILWAY UNTUK MODE UJI
+PAYMENT_GATEWAY=midtrans
+MIDTRANS_SERVER_KEY=isi Server Key Sandbox milik Anda dari dashboard Midtrans
+MIDTRANS_IS_PRODUCTION=false
+Opsional: MIDTRANS_QRIS_ACQUIRER=gopay (default). Acquirer lain yang didukung: airpay shopee, sesuai fasilitas akun Midtrans.
+
+MIDTRANS_SERVER_KEY diisi hanya di Railway Variables, bukan dikirim lewat chat. Client Key tidak diperlukan untuk alur QRIS Core API bot ini. Variabel admin/owner, Discord, SMSCode, SESSION_SECRET, dan lokasi database tetap dibiarkan. Pertahankan variabel TriPay jika ada tagihan TriPay yang belum selesai.
+
+NOTIFICATION URL
+Pastikan layanan bot mempunyai domain HTTPS publik yang mengarah ke port aplikasi (index.js menggunakan PORT Railway). Di Railway, buka service otp-discord-shop → Settings → Networking/Public Networking → Generate Domain jika belum memiliki domain.
+Buka dashboard Midtrans, pilih lingkungan Sandbox → Settings → Configuration → Payment Notification URL.
+Isi URL berikut dengan domain Railway Anda sendiri:
+https://DOMAIN-RAILWAY-ANDA/api/payments/midtrans/callback
+Simpan/Update. Endpoint tersebut menerima POST JSON dari Midtrans, bukan halaman yang dibuka dengan browser. Jangan memakai alamat localhost. Pengaturan BI SNAP bukan pengaturan integrasi Core API ini. Tidak perlu mengubah Finish/Unfinish Redirect URL untuk pembayaran QR langsung di bot.
+
+PENGUJIAN
+Tunggu deployment Railway sukses. Jalankan /shop baru.
+- Isi Saldo → QRIS Otomatis, masukkan nominal minimal 5000 dan email. Bot menampilkan QR mode uji; simulasikan pembayaran menggunakan simulator Sandbox Midtrans. Cek Pembayaran menampilkan saldo masuk setelah settlement terverifikasi.
+- Beli OTP → pilih layanan/negara/operator/harga → Bayar Langsung QRIS. Pesanan baru dibuat setelah settlement terverifikasi. Jika stok/harga provider berubah, harga produk dikembalikan ke saldo bot sesuai alur sebelumnya.
+- Pastikan notification callback masuk, saldo/pesanan tidak berulang setelah klik Cek Pembayaran lagi, serta saldo pembeli lain tidak berubah.
+
+AKTIFKAN PEMBAYARAN NYATA
+Selesaikan aktivasi akun dan fasilitas QRIS Midtrans. Setelah pengujian selesai dan tagihan Sandbox tidak ada yang aktif, ganti MIDTRANS_SERVER_KEY dengan Server Key Production dan MIDTRANS_IS_PRODUCTION=true. Atur Payment Notification URL yang sama pada dashboard lingkungan Production. Jangan mengubah mode saat masih ada tagihan aktif di mode sebelumnya. Lakukan pengujian transaksi nyata sebelum dipakai pelanggan.
+
+PERILAKU INTEGRASI
+Tagihan baru mengikuti PAYMENT_GATEWAY (midtrans/tripay); bila variabel kosong, default tetap tripay agar instalasi lama tidak berpindah otomatis. Tagihan tersimpan diperiksa lewat gateway asal, selama kredensial serta mode gateway tersebut masih sesuai. Batas 1 tagihan QRIS aktif berlaku lintas Midtrans dan TriPay. Mode uji/nyata ditampilkan berdasarkan mode setiap tagihan. Hasil transaksi yang belum jelas tetap menahan tagihan baru untuk menghindari pembayaran ulang.
+Callback Midtrans memverifikasi SHA512 signature, lalu membaca Get Status API melalui autentikasi Server Key. Order ID, transaction ID, nominal, currency IDR dan payment_type=qris harus sesuai. Hanya settlement terverifikasi yang mengkredit saldo / memicu pembelian; perubahan pending/capture/refund tidak dianggap sebagai pembayaran baru. Saldo dikreditkan satu kali dalam transaksi database. Refund dari gateway setelah saldo/pesanan sudah dikreditkan perlu diperiksa admin; tidak otomatis mendebit saldo pembeli. Tagihan Midtrans versi lama tanpa mode tersimpan perlu diperiksa admin, tidak diasumsikan valid secara otomatis.
+Bot tidak menambahkan biaya layanan pembeli pada tagihan Midtrans; biaya merchant dari Midtrans tetap mengikuti ketentuan akun dan tidak tercatat sebagai angka nol/estimasi pada database. Laporan selisih toko belum menghitung biaya merchant gateway.
+
+VERIFIKASI LOKAL
+123 tes lokal lulus; 14 modul runtime lolos pemeriksaan sintaks. Pengujian mencakup charge sandbox/production, signature, callback ulang, status/nominal tidak cocok, kepemilikan tagihan, kredit sekali, batas tagihan bersamaan, restart, perpindahan gateway, polling pembelian langsung dan resolusi admin. Belum diuji memakai akun/merchant aktif Anda atau pembayaran nyata.
+
+REFERENSI RESMI
+https://docs.midtrans.com/reference/qris
+https://docs.midtrans.com/reference/authorization
+https://docs.midtrans.com/reference/get-transaction-status
+https://docs.midtrans.com/docs/https-notification-webhooks
+https://docs.midtrans.com/docs/bagaimana-cara-memindahkan-akun-dari-sandbox-ke-production
+
+Petunjuk integrasi di atas menggantikan keterangan gateway pada panduan lama di bawah. Fitur toko dan alur pembayaran saldo/manual tetap berlaku.
+
+---------------------------------------------------------------------
+
+PERBAIKAN TERBARU — ERROR COMPONENT_CUSTOM_ID_DUPLICATED
+
+Jika versi lima fitur sudah terpasang: cukup ganti efficiency.js dan store-features.js di GitHub, lalu tunggu deployment Railway selesai. Buka /shop lagi dan tekan menu terbaru. Variables, saldo, admin, dan volume /data tidak perlu diubah.
+
+Penyebab: ID tombol Sebelumnya dan Berikutnya sama pada daftar kosong/satu halaman. ID kini berbeda walaupun tombol dinonaktifkan. Perbaikan mencakup Favorit, Pesanan Aktif, Status Pengajuan Manual, dan Pengajuan Manual Admin. Semua 110 tes lokal lulus, termasuk pengujian daftar kosong/satu halaman dan halaman batas. Belum diuji pada akun Discord aktif Anda.
+
+Jika belum memasang versi lima fitur, ikuti PEMASANGAN VERSI TERBARU di bagian berikut.
+
+---------------------------------------------------------------------
+
+LIMA FITUR EFISIENSI BARU — FAVORIT, PESANAN AKTIF, RINGKASAN ADMIN, BATAS QRIS, UPLOAD BUKTI
+
+PEMASANGAN VERSI TERBARU
+1. Cadangkan database terlebih dahulu. Pertahankan volume Railway /data dan konfigurasi database yang sudah ada.
+2. Ganti 5 file di GitHub: index.js, admin.js, purchase-flow.js, payments.js, direct-payments.js.
+3. Tambahkan efficiency.js di folder yang sama dengan index.js. Jangan hapus modul sebelumnya (termasuk store-features.js dan navigation.js). ZIP berisi seluruh modul pengganti dari perubahan sebelumnya; package.json/dependency proyek asli tetap dipakai.
+4. Tunggu deployment Railway selesai. Pastikan DISCORD_CLIENT_ID dan DISCORD_TOKEN tetap terisi agar command /bukti didaftarkan otomatis. Tidak ada dependency atau Variables baru.
+5. Jalankan /shop dan /admin lagi untuk mendapatkan tombol versi terbaru. Jika /bukti belum muncul, muat ulang Discord dan periksa log pendaftaran command di Railway.
+
+CARA MEMAKAI
+- Favorit: Beli OTP → pilih aplikasi/negara/operator/harga → Simpan Favorit. Beli OTP → Favorit Saya → pilih favorit → Lihat Harga & Stok. Favorit menyimpan kombinasi aplikasi, negara, operator; bukan mengunci harga atau memotong saldo. Katalog stok dan harga jual dibaca kembali dengan mekanisme cache katalog yang sudah ada (maksimal 60 detik), lalu diperiksa pada checkout. Maksimal 20 favorit, bisa dihapus dan hanya bisa diakses pemiliknya. Tersimpan di database volume.
+- Pesanan: Pesanan → Pesanan Aktif atau Riwayat Pesanan. Pesanan aktif diprioritaskan yang belum mendapat OTP, 5 per halaman. Tekan pesanan untuk Cek OTP, Batalkan, atau Beli Lagi. Status daftar adalah status tersimpan terakhir; Cek OTP memperbaruinya. Pembatalan tetap mengikuti syarat provider. Pesanan selesai/dibatalkan/kedaluwarsa/gagal/refund tidak termasuk daftar aktif.
+- Admin: /admin → Ringkasan. Menampilkan jumlah pengajuan manual menunggu, pembelian yang perlu diperiksa, tagihan QRIS aktif, saldo provider terkini jika API tersedia, dan maintenance. Tombol cepat menuju pemeriksaan manual, pemeriksaan pembayaran dan koneksi provider. Hanya admin aktif.
+- Tagihan QRIS: maksimal 1 tagihan aktif per pembeli untuk isi saldo dan pembelian langsung digabung. Isi Saldo → Tagihan Aktif membuka QR yang sudah dibuat. Jika membuat QRIS saat masih ada tagihan, bot mengarahkan pembeli ke tagihan lama. Pengecekan pembayaran menggunakan data TriPay terverifikasi; tagihan tidak otomatis dianggap selesai hanya karena waktu lokal lewat. Status EXPIRED/FAILED/REFUND terverifikasi atau pembayaran diterima melepas batas. Tagihan dengan respons/referensi belum jelas tetap menahan tagihan baru untuk menghindari pembayaran ganda; admin perlu memeriksa merchant_ref tersebut di TriPay. Penguncian tersimpan dan bertahan saat restart. Pembayaran dengan saldo tetap tersedia.
+- Bukti gambar: Isi Saldo → Manual → Kirim Gambar Bukti. Ketik /bukti, isi nominal minimal 5000, pilih/upload gambar dan catatan opsional. Contoh: /bukti nominal:5000 gambar:[unggah bukti] catatan:Transfer BCA. PNG/JPG/WebP maksimal 8 MB. Respons/status pengajuan hanya terlihat pembeli; admin memeriksanya lewat Pengajuan Manual. Saldo tidak ditambahkan sebelum persetujuan dan pemeriksaan mutasi. Alternatif tautan lama tetap tersedia. Database menyimpan URL attachment Discord, bukan salinan permanen gambar; URL bisa kedaluwarsa sehingga admin perlu meminta bukti ulang bila tidak dapat dibuka. Bot tidak memeriksa keaslian gambar secara otomatis.
+
+VERIFIKASI
+108 tes lokal lulus, mencakup kepemilikan favorit/pesanan, batas favorit, stok/harga terbaru, upload gambar, ringkasan admin, pembatasan QRIS bersamaan, penguncian saat respons gateway tidak jelas, persistence dan fitur sebelumnya. Semua 13 modul runtime lolos pemeriksaan sintaks. Belum diuji dengan akun aktif Discord/SMSCode/TriPay. QRIS nyata tetap membutuhkan merchant TriPay aktif dan konfigurasi lengkap.
+
+CATATAN: Petunjuk versi terbaru di atas menggantikan petunjuk menu lama di bawah. Tes .test.js dan CARA_PASANG.txt tidak wajib untuk menjalankan bot, tetapi boleh disimpan di GitHub; jangan upload database atau file berisi token/API key.
+
+---------------------------------------------------------------------
+PETUNJUK VERSI SEBELUMNYA
+
+ENAM FITUR TOKO BARU — PENCARIAN, BELI LAGI, PENGAJUAN MANUAL, LAPORAN, MAINTENANCE, PANDUAN REFUND
+
+PEMASANGAN
+Ganti index.js, admin.js, purchase-flow.js, payments.js, commerce.js, dan direct-payments.js. Tambahkan store-features.js di folder yang sama. File lain dari versi sebelumnya tetap diperlukan, termasuk navigation.js. Tidak perlu dependency atau Variables baru. Pertahankan Volume /data; database dan tabel baru dibuat otomatis tanpa menghapus saldo lama. Cadangkan database sebelum update. Tunggu Railway deployment selesai dan jalankan /shop atau /admin lagi.
+
+MENU PEMBELI
+- Beli OTP → Cari Aplikasi; setelah aplikasi dipilih, Cari Negara. Pencarian tidak membedakan huruf besar/kecil, berlaku hanya di katalog aplikasi terkait dan tersimpan untuk pengguna tersebut selama 10 menit. Kosongkan pencarian untuk melihat semua pilihan. Mulai Ulang menghapus pencarian. Halaman aplikasi/negara memuat 15 pilihan agar semua tombol muat.
+- Pesanan → Beli Lagi pada salah satu dari 10 pesanan terbaru. Ini membuka konfirmasi baru, tidak langsung memotong saldo. Harga jual, stok dan produk dibaca lagi; aplikasi, negara, operator dipertahankan pada pesanan baru. Pesanan wallet versi lama mungkin belum memiliki metadata; jika produk tidak ditemukan, pilih kembali lewat katalog.
+- Isi Saldo → Manual → Ajukan Bukti Pembayaran. Hubungi admin/ikuti petunjuk pembayaran, lakukan pembayaran, upload gambar bukti ke Discord, salin tautan gambar, isi nominal 5.000–1.000.000 IDR dan catatan. Bot menerima tautan PNG/JPG/WebP dari cdn.discordapp.com atau media.discordapp.net, tidak mengambil isi tautan secara otomatis. Tautan gambar dapat kedaluwarsa; admin perlu meminta bukti ulang jika tidak dapat dibuka. Tidak ada dana yang ditambahkan sebelum persetujuan. Maksimal 3 pengajuan pending per pembeli. Bukti dengan path yang sama tidak dapat diajukan ulang walau query/hostname berubah. Admin tetap harus memeriksa mutasi; deteksi gambar palsu atau penggunaan bukti transfer berbeda tidak otomatis.
+- Status Pengajuan: hanya milik pembeli tersebut. Hasil juga dikirim melalui DM; jika DM tertutup, status tetap dapat dicek.
+- Bantuan dan Konfirmasi Pembelian → Panduan Refund. Refund produk ke saldo bot, bukan rekening/e-wallet; biaya QRIS tidak termasuk. Pembatalan membutuhkan persetujuan provider dan belum menerima OTP.
+
+MENU ADMIN
+- Saldo Pembeli → Pengajuan Manual → pilih pengajuan → Setujui/Tolak. Saat menyetujui, isi catatan dan ketik SUDAH DIPERIKSA setelah mencocokkan pengirim, nominal, mutasi, serta memastikan transaksi belum dikreditkan lewat Tambah Saldo Pembeli. Pengajuan disetujui hanya dikreditkan sekali dan dicatat pada Riwayat Saldo Manual. Jangan kredit manual langsung untuk bukti yang sama lalu menyetujui pengajuannya: sumber pembayaran yang sama tidak dapat dideteksi otomatis antar kedua alur.
+- Notifikasi pengajuan ke DM admin aktif dicoba tiap 30 detik, hasil keputusan ke DM pembeli. Notifikasi yang gagal dicoba ulang. Data status/notifikasi tetap tersimpan dalam database. Restart sesudah DM terkirim sebelum penandaan tersimpan bisa menyebabkan DM terulang, namun saldo tidak dikreditkan ulang.
+- Transaksi → Laporan & Operasional → Laporan Hari Ini/Bulan Ini. Periode menggunakan WIB. Laporan berasal dari pesanan tersimpan; menampilkan jumlah order, penjualan kotor, refund, penjualan setelah refund, biaya provider yang diketahui dan selisih kotor. Topup bukan penjualan. Selisih kotor bukan laba bersih karena belum dikurangi fee gateway, hosting dan lainnya. Refund dikaitkan ke periode pembuatan pesanan, bukan tanggal refund.
+- Transaksi → Laporan & Operasional → Maintenance. Aktifkan untuk menahan pembelian baru (wallet maupun invoice QRIS baru). Tagihan yang sudah dibuat sebelum maintenance tetap dapat dibayar dan diproses; pengecekan OTP, pembatalan dan topup tetap tersedia. Status tersimpan setelah restart. Nonaktifkan untuk membuka toko.
+
+VALIDASI
+98 tes lokal lulus, termasuk persetujuan saldo idempotent/rollback, privasi pembeli, akses admin, bukti duplikat, pencarian per pengguna, operator, laporan WIB dan penguncian maintenance. Belum diuji pada Discord/SMSCode/TriPay akun aktif. Fitur QRIS tetap membutuhkan merchant dan konfigurasi TriPay lengkap.
+
+MENU UTAMA TANPA TOMBOL MENU AWAL
+
+Untuk perubahan ini cukup ganti navigation.js. Halaman utama toko hanya menampilkan Beli OTP, Saldo, Pesanan, Isi Saldo, dan Bantuan. Tombol Menu Awal tetap tersedia di submenu pembeli dan admin. Jalankan /shop lagi setelah deployment; pesan lama tidak otomatis diedit, gunakan Dismiss message untuk menutup pesan pribadi lama. Lima tes navigasi lulus.
+
+TOMBOL MENU AWAL DI SEMUA MENU
+
+Untuk perubahan ini, ganti index.js dan tambahkan navigation.js di GitHub pada folder yang sama. Setelah deployment, jalankan /shop atau /admin lagi. Semua balasan submenu pembeli/admin dan hasil transaksi memiliki tombol Menu Awal. Tombol membuka halaman utama toko secara pribadi agar tidak mengubah menu publik milik pembeli lain. Tombol ini tidak membatalkan pesanan atau invoice yang sedang berjalan. Form input Discord (modal) tetap ditutup dengan tombol tutup bawaan; setelah dikirim, pesan hasil memiliki Menu Awal. Izin server dan otorisasi admin tetap diperiksa.
+
+Pada katalog provider yang penuh 25 tombol, Menu Awal menggantikan Mulai Ulang; produk, pagination, Kembali, dan Panel Admin tetap tersedia. 83 tes lokal lulus; belum diuji pada akun Discord aktif.
+
+PENYIMPANAN DATA PERMANEN — VOLUME RAILWAY
+
+Ganti index.js dengan versi dalam paket ini. Buat Volume Railway, hubungkan ke layanan bot, dan gunakan Mount Path /data. Kode otomatis memakai RAILWAY_VOLUME_MOUNT_PATH yang disediakan Railway. Opsional: DB_PATH=/data/shop.db untuk menentukan lokasi secara eksplisit. Tanpa Volume, data masih berada pada disk sementara dan bisa hilang saat redeploy.
+
+Data admin tambahan, izin server, pembeli, saldo, transaksi, dan pengaturan berada di database yang sama. OWNER_DISCORD_IDS dan ADMIN_DISCORD_IDS tetap berada di Variables Railway. Jangan upload shop.db ke GitHub. Gunakan satu replica.
+
+Jika sudah ada data: cadangkan database lama SEBELUM redeploy atau membuat Volume. Pindahkan database ke /data/shop.db saat bot berhenti. Jika database menggunakan WAL, lakukan backup SQLite yang konsisten atau checkpoint dengan bot berhenti; jangan hanya menyalin shop.db saat bot masih menulis. Kode tidak otomatis memindahkan data dari deployment lama. Mengganti lokasi tanpa pemindahan akan membuka database kosong.
+
+Setelah pemasangan, buat data percobaan, redeploy, lalu cek data tersebut masih ada. Aktifkan backup Volume Railway juga.
+
+PEMBARUAN NAMA, IZIN SERVER, DAN ADMIN TOKO
+Nama pada menu/pesan bot diganti menjadi Hi, OTP Sms Virtual. Ini tidak mengubah Username akun Discord di Developer Portal. Prefix tagihan lama tetap dipertahankan agar pembayaran lama tetap terbaca.
+Unggah/ganti delapan file di GitHub: index.js, admin.js, payments.js, operations.js, purchase-flow.js, direct-payments.js, server-access.js, staff.js. Dua file terakhir adalah modul BARU dan wajib ada di folder yang sama dengan package.json. commerce.js dan pricing.js dari versi sebelumnya tetap diperlukan. Jangan menghapus shop.db atau menimpa token lama.
+Jika belum memasang pembaruan sebelumnya, ZIP memuat semua sepuluh modul runtime. File *.test.js dan panduan tidak diperlukan untuk menjalankan bot, tetapi dapat disimpan untuk pemeriksaan. Tidak perlu mengganti package.json atau memasang dependency baru. Tunggu deployment Railway terbaru berhasil, lalu /shop dan /admin baru.
+
+OWNER DAN ADMIN TAMBAHAN
+Disarankan tambahkan OWNER_DISCORD_IDS di Variables Railway, berisi ID Discord pengguna OWNER toko (bukan Client ID/bot ID). Beberapa owner dipisahkan koma. Jika OWNER_DISCORD_IDS kosong/belum diisi, semua ID pada ADMIN_DISCORD_IDS lama dianggap owner agar akses pengguna lama tetap tersedia.
+Jika ADMIN_DISCORD_IDS lama berisi orang lain yang seharusnya hanya admin, isi OWNER_DISCORD_IDS dengan ID owner yang benar terlebih dahulu. Owner yang ditetapkan melalui Variables tidak dapat dicabut dari bot; ubah Variables bila perlu.
+/admin > Transaksi > Izin & Admin > Admin Toko > Tambah Admin > isi ID Discord pengguna calon admin.
+Bot memeriksa akun pengguna dan menolak akun bot. Admin baru dapat membuka /admin langsung. Owner dapat memilih akun pada daftar lalu Cabut Akses Admin. Pencabutan berlaku untuk interaksi berikutnya, termasuk tombol/modal lama. Admin tambahan TIDAK boleh mengangkat atau mencabut admin/owner.
+Admin tambahan memiliki hak operasional toko: saldo pembeli, katalog, harga, petunjuk pembayaran, transaksi/refund, dan izin server. Berikan akses hanya kepada orang yang dipercaya. Hak operasional ini tidak dibatasi pada satu server; semua server yang disetujui memakai toko dan saldo yang sama. Pemilik/server admin Discord biasa tidak otomatis menjadi admin TOKO.
+Daftar admin dan perubahan peran disimpan di shop.db bersama catatan ID owner/waktu. Pengguna yang dicabut tetap tercatat pada riwayat. Daftar kontak pembayaran manual, peringatan saldo provider, dan permintaan izin server memakai admin yang masih aktif.
+
+IZIN VERIFIKASI SERVER
+/admin > Transaksi > Izin & Admin > Izin Server > pilih server > Setujui Server / Tolak Server / Cabut Izin.
+Saat bot bergabung ke server baru, server masuk status Menunggu verifikasi dan layanan pembeli terkunci. Permintaan izin dikirim melalui DM owner/admin toko. Persetujuan mengaktifkan layanan pada server itu. Penolakan/pencabutan mengunci /shop dan tombol pembelian/isi saldo lama.
+Server yang sudah memakai bot sebelum pembaruan juga perlu disetujui sekali setelah kode baru dijalankan. Owner/admin toko tetap boleh membuka /admin pada server yang terkunci untuk memberikan izin. Jika DM ditutup, buka daftar Izin Server melalui /admin; permintaan tetap tersimpan.
+Persetujuan tetap tersimpan setelah restart bila database persisten. Jika bot keluar lalu diundang kembali (terdeteksi event keluar), server perlu disetujui ulang. Fitur ini mengunci pemakaian bot di server, bukan mencegah orang mengundang akun bot melalui tautan Discord. Pembelian melalui DM bot tetap dapat digunakan.
+Minimal isi saldo QRIS/manual Rp5.000 tetap berlaku. Semua fitur sebelumnya tetap tersedia. Riwayat/admin tetap pribadi.
+
+PENGUJIAN TERBARU
+Seluruh 79 tes lokal menggunakan mock Discord, SMSCode, dan TriPay lulus, termasuk role owner/admin, pencabutan akses, server pending/disetujui/dicabut, modal admin, minimal topup, notifikasi dan refund. Belum diuji langsung pada akun pengguna.
+node --test catalog.test.js admin.test.js purchase-flow.test.js payments.test.js commerce.test.js direct-payments.test.js operations.test.js access.test.js
+Gunakan satu instance dan shop.db pada penyimpanan persisten agar saldo, izin server dan daftar admin tidak hilang saat redeploy. Cadangkan database sebelum pembaruan. Kode ini tidak memasang volume Railway secara otomatis.
+
+HI, OTP SMS VIRTUAL — TRIPAY, SALDO, KATALOG PROVIDER
+
+PEMBARUAN MINIMAL ISI SALDO
+Jika versi lima fitur operasional sudah dipasang, cukup ganti payments.js dan admin.js di GitHub. Tunggu Railway deployment berhasil lalu buka /shop dan /admin baru.
+Minimal isi saldo QRIS dan manual adalah 5.000 IDR (maksimal 1.000.000 IDR). Nominal kurang dari 5.000 ditolak sebelum tagihan/kredit saldo dibuat. Nilai ini juga tampil pada menu Isi Saldo dan formulir admin tambah saldo. Saldo lama tidak diubah. Refund tetap sebesar harga produk, walau kurang dari 5.000. Pembelian QRIS langsung tetap mengikuti harga produk dengan batas provider minimal 1.000; batas isi saldo tidak diterapkan ke pembelian langsung. Empat puluh enam tes terkait admin, pembayaran, QRIS beli, dan operasional lulus setelah perubahan.
+
+PEMBARUAN LIMA FITUR OPERASIONAL
+Jika versi sebelumnya sudah dipasang, ganti empat file di GitHub: index.js, admin.js, payments.js, direct-payments.js. Tambahkan file baru operations.js di folder yang sama dengan package.json. Modul commerce.js, pricing.js, purchase-flow.js tetap diperlukan. Jangan menghapus modul lama atau shop.db. Tidak perlu package.json/dependency/Variables baru.
+Tunggu deployment Railway terbaru berhasil, lalu buka /admin dan /shop baru. File operations.js wajib dipasang sebelum bot yang baru dijalankan. ZIP berisi seluruh delapan modul versi terbaru, pengujian, dan panduan.
+
+1. CARI PEMBELI
+/admin > Saldo Pembeli > Cari Pembeli > masukkan ID Discord pengguna.
+Menampilkan saldo akun, tiga pesanan terakhir, dan tiga isi saldo QRIS terakhir untuk ID itu saja. Akun yang belum tersimpan tidak dibuat otomatis oleh pencarian. Daftar Saldo Pembeli tetap tersedia dengan paginasi.
+
+2. PENGATURAN PEMBAYARAN MANUAL
+/admin > Transaksi > Pengaturan Pembayaran Manual.
+Isi rekening/tujuan pembayaran yang benar, nama penerima, dan petunjuk mengirim bukti (maksimal 1.100 karakter). Simpan. Pembeli langsung melihat teks baru lewat /shop > Isi Saldo > Manual; tidak perlu restart. Jika pengaturan belum pernah disimpan, MANUAL_TOPUP_INSTRUCTIONS lama tetap menjadi teks awal. Jika formulir dikosongkan lalu disimpan, pembeli diminta menghubungi admin tanpa rekening yang ditampilkan.
+Admin memeriksa bukti pembayaran lalu /admin > Saldo Pembeli > Tambah Saldo Pembeli. Saldo manual tidak masuk otomatis hanya karena pembeli mengirim bukti. Setiap perubahan pengaturan dicatat dengan ID admin.
+
+3. NOTIFIKASI OTP OTOMATIS
+Bot mengecek maksimal sepuluh pesanan per putaran setiap 15 detik, bergantian jika pesanan lebih banyak. Berlaku untuk pesanan saldo dan QRIS yang tercatat di bot. Setelah OTP masuk, kode disimpan dan dikirim melalui DM pemilik pesanan. Kode yang sudah terkirim tidak dikirim lagi dalam pemeriksaan normal; kode baru dapat dikirim lagi. Status kirim disimpan di database dan tetap digunakan setelah restart.
+Pembeli harus mengizinkan DM bot. Jika DM ditutup/gagal, kode tetap disimpan dan Cek OTP tetap tersedia. Bot mencoba DM kembali pada putaran berikutnya. Waktu API lambat atau antrean pesanan dapat menambah keterlambatan. Jika bot berhenti setelah DM terkirim sebelum pencatatan selesai, notifikasi dapat terkirim ulang setelah restart; ini tidak menambah pesanan atau saldo.
+
+4. PERINGATAN SALDO PROVIDER
+/admin > Katalog > Peringatan Saldo Provider.
+Default aktif: peringatan jika saldo SMSCode di bawah 10.000 IDR. Ubah batas dan status 1 (aktif) / 0 (nonaktif). Bot mengecek sekitar lima menit sekali lalu mengirim DM ke pengguna dalam ADMIN_DISCORD_IDS. Peringatan tidak berulang selama saldo terus rendah; aktif lagi setelah saldo naik mencapai batas lalu turun lagi, atau setelah pengaturan diubah. Admin harus mengizinkan DM bot. Saldo provider adalah saldo SMSCode, terpisah dari saldo pembeli dan saldo TriPay.
+
+5. PENYELESAIAN TRANSAKSI BERMASALAH
+/admin > Transaksi > Pembayaran Perlu Diperiksa > pilih tagihan.
+Daftar transaksi review memakai paginasi lima tagihan per halaman. Periksa tagihan di TriPay dan riwayat pesanan SMSCode sebelum memilih tindakan.
+A. Hubungkan Pesanan: isi ID order provider yang benar, catatan, dan ketik SUDAH DIPERIKSA. Bot mengambil detail order melalui API SMSCode, memeriksa produk, operator, biaya provider, nomor, dan status. Pesanan yang sudah terhubung ke transaksi lain ditolak. Pesanan aktif atau sudah menerima OTP/selesai dapat dihubungkan tanpa membeli ulang dan tanpa menambah saldo. Pembeli mendapat akses ke pesanan melalui DM bot.
+B. Refund ke Saldo: isi ID order jika ada, catatan pemeriksaan, dan ketik SUDAH DIPERIKSA. ID order yang sudah tercatat wajib dipakai. Jika masih aktif dan belum menerima OTP, bot membatalkan dan membaca ulang status sebelum refund. Order yang sudah menerima OTP/selesai ditolak untuk refund. Jika ID order tidak diketahui, admin WAJIB memeriksa riwayat SMSCode dan memastikan tidak ada pesanan berhasil atau masih aktif untuk pembayaran itu. Bot tidak dapat membuktikan hubungan tagihan dengan order provider yang tidak memiliki ID; tanggung jawab pencocokan ini ada pada admin.
+Pembayaran diambil ulang dari API TriPay dan harus masih PAID sebelum kedua tindakan. Kredensial/mode TriPay yang sesuai harus aktif. Refund hanya harga produk ke SALDO BOT, bukan rekening pembayaran; biaya QRIS tidak termasuk. Penambahan saldo, perubahan status, dan catatan admin disimpan dalam satu transaksi database. Tagihan yang sudah diselesaikan tidak direfund atau dihubungkan lagi. Jika API/pembatalan bermasalah, tagihan tetap review, bukan membeli ulang. Catatan resolusi menyimpan ID admin, bukti pemeriksaan, tindakan, ID order, dan waktu.
+Pengiriman hasil kepada pembeli menggunakan worker sebelumnya; jika DM gagal, pembeli bisa menekan Cek Pembayaran & Pesanan pada tagihan. Jika restart terjadi ketika proses resolusi belum selesai, transaksi dikembalikan ke review untuk pemeriksaan ulang.
+
+PANEL UTAMA TETAP RINGKAS
+Katalog: katalog provider, produk manual, tambah produk, koneksi/saldo provider, pengaturan peringatan saldo.
+Harga Jual: markup dan tambahan rupiah.
+Saldo Pembeli: daftar saldo, cari pembeli, tambah saldo, riwayat saldo manual.
+Transaksi: riwayat isi saldo, riwayat QRIS beli, pembayaran perlu diperiksa, pengaturan pembayaran manual.
+
+PENYIMPANAN DAN PENGUJIAN TERBARU
+Seluruh 69 tes lokal menggunakan provider/Discord/TriPay mock lulus. Termasuk penolakan akses nonadmin, OTP sekali per kode, DM gagal, peringatan saldo per episode, refund ganda, konkurensi admin, rollback, dan pemulihan setelah restart. Belum diuji langsung dengan token/akun pengguna.
+node --test catalog.test.js admin.test.js purchase-flow.test.js payments.test.js commerce.test.js direct-payments.test.js operations.test.js
+Gunakan satu instance bot dan database shop.db yang sama pada penyimpanan persisten. Cadangkan database sebelum pembaruan. Tanpa database persisten, saldo, pengaturan, catatan, dan penanda notifikasi bisa hilang saat redeploy; menambahkan kode saja tidak memasang volume Railway.
+
+PEMBARUAN DAFTAR SALDO PEMBELI
+Cukup ganti admin.js di GitHub jika versi sebelumnya sudah dipasang. Tunggu deployment Railway selesai, lalu /admin baru > Saldo Pembeli > Daftar Saldo Pembeli. Tidak perlu Variables tambahan.
+Daftar menampilkan akun pembeli yang sudah tersimpan di shop.db, ID Discord, saldo saat ini, total saldo seluruh akun, dan jumlah akun. Akun bersaldo 0 tetap ditampilkan. Urutan saldo terbesar, sepuluh akun per halaman, dengan Sebelumnya / Berikutnya / Perbarui / Kembali. Hanya admin terdaftar yang dapat membuka daftar. Menu ini membaca saldo tanpa mengubahnya. Sembilan tes admin terbaru lulus, termasuk paginasi dan pembaruan saldo.
+
+PEMBARUAN PANEL ADMIN RINGKAS
+Jika versi sebelumnya sudah dipasang, cukup ganti admin.js di GitHub. Tunggu deployment Railway berhasil lalu buka /admin baru.
+Panel utama hanya berisi empat kategori dan Tutup Panel:
+Katalog > Katalog Provider / Produk Manual / Tambah Produk / Koneksi & Saldo Provider
+Harga Jual > formulir markup dan tambahan rupiah
+Saldo Pembeli > Daftar Saldo Pembeli / Tambah Saldo Pembeli / Riwayat Saldo Manual
+Transaksi > Riwayat Isi Saldo / Riwayat QRIS Beli / Pembayaran Perlu Diperiksa
+Setiap submenu memiliki tombol Kembali. Semua akses tetap dibatasi ADMIN_DISCORD_IDS. Delapan tes admin terbaru lulus, termasuk navigasi kategori dan akses yang ditolak.
+
+PEMBARUAN PILIHAN ISI SALDO
+Jika versi operator terbaru sudah dipasang, ganti empat file: index.js, payments.js, admin.js, direct-payments.js di GitHub. Tunggu deployment Railway terbaru berhasil lalu buka /shop baru.
+Riwayat Isi Saldo dan Riwayat QRIS Beli dipindahkan dari menu pembeli ke /admin. Masing-masing menampilkan lima transaksi terakhir dari semua pembeli (ID pembeli, nominal, status). Riwayat Saldo Manual tetap terpisah di /admin. Pesan menu lama masih memiliki tombol lama; hapus pesan itu lalu gunakan /shop dan /admin baru.
+Menu utama: Isi Saldo > QRIS Otomatis / Manual. QRIS memakai TriPay dengan formulir nominal dan email sebelumnya. Manual menampilkan ID Discord pembeli, kontak admin dari ADMIN_DISCORD_IDS, dan petunjuk mengirim bukti pembayaran. Admin memeriksa pembayaran lalu /admin > Saldo Pembeli > Tambah Saldo Pembeli. Pilihan Manual tetap bisa dibuka saat QRIS belum dikonfigurasi.
+Opsional: tambahkan MANUAL_TOPUP_INSTRUCTIONS di Variables Railway untuk menampilkan rekening/tujuan pembayaran atau petunjuk toko. Tanpa variabel ini, pembeli diminta menghubungi admin untuk tujuan pembayaran. Jangan mengisi data pembayaran contoh yang belum benar. MANUAL_TOPUP_INSTRUCTIONS dapat berisi teks sampai 1.100 karakter yang ditampilkan ke pembeli.
+Contoh petunjuk umum: Hubungi admin sebelum transfer. Kirim bukti pembayaran dan ID Discord Anda. Saldo masuk setelah pembayaran diperiksa.
+
+PEMBARUAN OPERATOR
+Ganti empat file di GitHub: index.js, purchase-flow.js, commerce.js, direct-payments.js, operations.js. Tunggu Railway deployment terbaru berhasil, lalu /shop > Beli OTP baru (jangan lanjutkan tombol pilihan operator pesan lama). Tidak perlu Variables baru. Perbaikan menu saldo pribadi dan saldo manual tetap disertakan.
+Daftar operator kini dibaca langsung dari /catalog/operators untuk aplikasi dan negara terpilih. /catalog/products tanpa operator_id adalah kategori Any; setelah operator dipilih, operator_id dikirim untuk meminta harga dan stok operator itu. Bot tidak mengarang nama operator. Pilihan yang tampil tetap mengikuti respons API SMSCode saat itu, sehingga stok dapat berbeda dari screenshot website.
+Operator ikut disimpan pada tagihan QRIS dan diperiksa setelah pembayaran/restart. Pembaruan menambahkan kolom operator_id ke database secara otomatis, tanpa menghapus saldo atau tagihan lama. Semua 51 tes lokal lulus menggunakan mock; belum diuji langsung dengan token SMSCode pengguna.
+
+PEMBARUAN MENU UNTUK SERVER
+Nominal saldo dihapus dari teks menu utama /shop. Tombol Saldo tetap menampilkan saldo pribadi (ephemeral) milik pengguna yang menekan tombol. Jika versi saldo manual sudah dipasang, cukup ganti index.js. Tunggu deployment terbaru, hapus pesan menu lama yang menampilkan saldo, lalu jalankan /shop baru.
+
+PEMBARUAN SALDO MANUAL
+Jika sudah memasang versi TriPay sebelumnya, cukup ganti index.js dan admin.js di GitHub. Tidak perlu menambahkan Variables. Tunggu deployment terbaru lalu buka /admin baru.
+/admin > Saldo Pembeli > Tambah Saldo Pembeli > isi ID pengguna Discord pembeli, nominal tanpa titik/koma (5.000–1.000.000 rupiah), dan catatan pembayaran > kirim. Pengguna diperiksa melalui Discord, ID bot ditolak. Saldo ditambahkan, bukan diganti, dan langsung bisa dipakai Bayar Pakai Saldo. Kredit manual tidak mengisi saldo SMSCode atau akun TriPay.
+/admin > Saldo Pembeli > Riwayat Saldo Manual menampilkan empat transaksi terakhir, ID admin, ID pembeli, nominal, catatan, dan saldo setelah transaksi. Catatan seluruh transaksi disimpan di shop.db. Pengiriman ulang interaksi yang sama tidak menggandakan saldo; mengirim formulir baru merupakan transaksi baru. Pastikan ID pembeli dan pembayaran benar sebelum mengirim formulir.
+
+PEMBARUAN DARI VERSI MIDTRANS TERAKHIR
+Ganti index.js, payments.js, direct-payments.js di GitHub pada folder yang sama dengan package.json. Modul admin.js, purchase-flow.js, pricing.js, commerce.js tetap diperlukan dari versi terakhir. Tidak perlu mengubah package.json. File .env.example adalah contoh, jangan menimpa Variables/token lama. Jangan commit .env atau API Key.
+ZIP juga memuat seluruh modul versi terbaru dan file pengujian. Jika belum memasang versi admin/katalog/markup sebelumnya, gunakan seluruh delapan modul: index.js, admin.js, purchase-flow.js, payments.js, pricing.js, commerce.js, direct-payments.js, operations.js.
+Tunggu deployment Railway terbaru berhasil, lalu buka /shop dan /admin baru. Pesan Discord lama tidak otomatis berubah.
+
+VARIABEL RAILWAY UNTUK TRIPAY
+TRIPAY_API_KEY = API Key merchant dari akun TriPay
+TRIPAY_PRIVATE_KEY = Private Key merchant dari akun TriPay
+TRIPAY_MERCHANT_CODE = kode merchant dari akun TriPay
+TRIPAY_QRIS_CHANNEL = QRIS (atau kode QRISC / QRIS2 / QRIS_SHOPEEPAY yang aktif di merchant)
+TRIPAY_IS_PRODUCTION = false untuk uji Sandbox; true untuk pembayaran nyata Production
+Ketiga credential harus berasal dari merchant dan mode yang sama. Merchant serta channel QRIS harus aktif. Variabel MIDTRANS_* tidak digunakan oleh integrasi baru.
+
+MENDAPATKAN CREDENTIAL DAN CALLBACK
+Menurut dokumentasi TriPay:
+Sandbox: API & Integrasi > Simulator > Merchant > Detail; aktifkan channel di Simulator > Merchant > Channel Pembayaran.
+Production: Merchant > Opsi > Edit (letak label dapat mengikuti dashboard); channel di API & Integrasi > Merchant > Opsi > Atur Channel Pembayaran.
+Isi callback default merchant yang sesuai mode dengan:
+https://DOMAIN-BOT-KAMU/api/payments/tripay/callback
+DOMAIN-BOT-KAMU adalah domain HTTPS publik service bot Railway, bukan alamat dashboard railway.com. Railway > service bot > Settings > Networking > Public Networking > Generate Domain. Jika port diminta, sesuaikan dengan PORT bot.
+Kode ini memakai callback default merchant TriPay. Tidak perlu menambahkan variabel callback URL di Railway.
+Pastikan callback dapat diakses publik. Membuka URL callback lewat browser adalah GET dan tidak membuktikan callback POST gagal/berhasil; gunakan Callback Tester atau transaksi Sandbox untuk pengujian.
+Simpan API Key dan Private Key hanya di Variables Railway, bukan melalui chat atau repository.
+
+DUA PEMBAYARAN
+/shop > Beli OTP > Aplikasi > Negara > Operator > Produk > pilih pembayaran.
+1. Bayar Pakai Saldo: saldo bot dipotong harga jual; pesanan dibuat di SMSCode.
+2. Bayar Langsung QRIS: pembeli mengisi email tagihan, lalu memindai QRIS TriPay. Tidak perlu saldo bot. Pesanan dibuat otomatis setelah status PAID dibaca dari API TriPay.
+Untuk QRIS, harga produk minimal 1.000 IDR, maksimal batas aplikasi 1.000.000 IDR; untuk produk di bawah 1.000 gunakan saldo. QR berlaku 20 menit sesuai request; provider tetap menentukan status akhir.
+Bot menampilkan harga produk, biaya QRIS pembeli, dan total bayar. Biaya mengikuti pengaturan merchant TriPay. Jika biaya ditanggung merchant, total pembeli sama dengan harga produk tetapi dana bersih merchant berkurang. Jika ditanggung pembeli, total bayar bertambah; nominal saldo/produk tetap sebesar harga awal, bukan total termasuk biaya.
+Biaya standar QRIS pada dokumentasi TriPay adalah Rp750 + 0,7%, tetapi akun merchant dapat mempunyai biaya berbeda. Periksa pengaturan biaya merchant agar sesuai keuntungan toko.
+Saldo SMSCode adalah dana terpisah dari saldo akun TriPay; admin tetap perlu memastikan saldo provider cukup untuk membuat pesanan. Pembayaran QRIS tidak mengisi saldo SMSCode secara otomatis.
+
+ISI SALDO QRIS
+/shop > Isi Saldo > QRIS Otomatis > masukkan nominal 5.000–1.000.000 dan email > bayar QR > saldo bot bertambah satu kali setelah terverifikasi.
+Riwayat Isi Saldo terpisah dari Riwayat QRIS Beli.
+
+HASIL DAN KEGAGALAN PEMBELIAN
+Setelah QRIS dibayar, nomor pesanan tersedia lewat Cek Pembayaran & Pesanan pada pesan tagihan. Riwayat QRIS Beli tersedia untuk admin melalui /admin. Bot juga mencoba mengirim hasil melalui DM. Jika DM ditutup, pembeli dapat memakai tombol Cek Pembayaran & Pesanan pada pesan tagihan atau meminta admin memeriksa riwayat. Cek OTP dan Batalkan tersedia untuk pesanan berhasil.
+Stok tidak dipesan sebelum pembayaran. Jika habis/nonaktif atau harga dasar berubah, harga produk dikembalikan sekali ke SALDO BOT, bukan rekening pembayaran. Biaya QRIS tidak dikembalikan otomatis. Kebijakan ini ditampilkan pada QRIS pembelian.
+Jika koneksi ke SMSCode terputus setelah permintaan order, hasil mungkin belum pasti. Bot menandainya review dan tidak membeli ulang otomatis. Admin dapat melihat /admin > Transaksi > Pembayaran Perlu Diperiksa dan mencocokkan tagihan dengan riwayat SMSCode sebelum menyelesaikan/mengganti dana. Tombol resolusi tersedia melalui /admin > Transaksi > Pembayaran Perlu Diperiksa; ikuti panduan lima fitur di atas.
+Tagihan yang tidak menampilkan QR setelah respons terputus tetap disimpan. Jangan langsung membuat QR lain; minta admin mengecek riwayat/callback dan mencocokkan merchant_ref pada TriPay. Callback yang valid bisa memulihkan referensi TriPay yang belum tersimpan.
+
+VERIFIKASI DAN PEMULIHAN
+Callback memakai HMAC-SHA256 dari byte body asli dan Private Key, serta event payment_status. Status dibaca ulang dari /transaction/detail. Referensi, merchant_ref, channel, harga item, biaya dan total bayar diperiksa. Respons callback berhasil adalah {success:true}.
+Notifikasi berulang tidak menggandakan saldo/pesanan. Pemeriksaan setiap 30 detik memproses maksimal 5 tagihan per putaran; keterlambatan API dapat menambah waktu. Proses provider yang terputus saat restart ditandai review, bukan dibeli ulang.
+Tagihan Midtrans lama tetap disimpan; integrasi TriPay tidak memprosesnya. Jika ada tagihan Midtrans lama yang terbayar/tertunda, admin perlu memeriksanya di Midtrans sebelum menyelesaikan secara manual. Penggantian mode Sandbox/Production juga tidak mengubah mode tagihan lama. Jangan mencampur credential/mode.
+
+ADMIN DAN HARGA
+ADMIN_DISCORD_IDS berisi ID pengguna admin Discord, beberapa ID dipisahkan koma. DISCORD_CLIENT_ID wajib untuk registrasi /shop dan /admin.
+/admin > Katalog > Katalog Provider > Aplikasi > Negara > Operator > Produk menampilkan harga dasar, harga jual, selisih, stok dan status. Katalog dibaca SMSCode, cache 60 detik, pilihan memakai tombol dengan navigasi.
+Atur Harga Jual berlaku global: harga dasar + pembulatan ke atas(harga dasar x persen/100) + tambahan rupiah. Contoh dasar 5.000, markup 20%, tambahan 0 = jual 6.000 IDR. Default markup 0 sampai diatur. Harga dasar provider tidak dapat diubah dari bot. Produk Manual adalah katalog terpisah, tidak dipakai oleh Beli OTP.
+
+PENYIMPANAN DAN TES
+Gunakan satu instance bot dan shop.db pada volume persisten supaya saldo, tagihan, pesanan serta pengaturan harga tetap ada saat redeploy.
+51 tes lokal menggunakan mock provider lulus. Menjalankan tes:
+node --test catalog.test.js admin.test.js purchase-flow.test.js payments.test.js commerce.test.js direct-payments.test.js
+Tes SQLite dijalankan dengan Node 24; aplikasi bot memakai better-sqlite3 dari package.json dan Node 22. Belum diuji langsung menggunakan akun TriPay/Discord/SMSCode pengguna. Uji Sandbox dan callback sebelum mengaktifkan Production.
+Referensi: https://tripay.co.id/developer

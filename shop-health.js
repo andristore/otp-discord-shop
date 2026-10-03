@@ -1,5 +1,6 @@
 function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspectChannel,language=()=>'id',env=process.env,now=Date.now}){
   db.exec(`CREATE TABLE IF NOT EXISTS shop_health_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS owner_incident_alerts(scope TEXT NOT NULL,owner_id TEXT NOT NULL,seen_ms INTEGER NOT NULL DEFAULT 0,total_count INTEGER NOT NULL DEFAULT 0,sent_ms INTEGER NOT NULL DEFAULT 0,attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,owner_id));
     CREATE TABLE IF NOT EXISTS invoice_reminders(order_id TEXT PRIMARY KEY,sent_ms INTEGER NOT NULL DEFAULT 0,checked_ms INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS overdue_notifications(kind TEXT NOT NULL,ref TEXT NOT NULL,admin_id TEXT NOT NULL,sent_at INTEGER NOT NULL,PRIMARY KEY(kind,ref,admin_id));`);
   const admin=id=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');};
@@ -8,6 +9,19 @@ function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspect
   function settings(user){admin(user);return {minutes:Number(read('minutes','15')),enabled:read('enabled','1')==='1'};}
   function configure(user,value){admin(user);if(!/^\d+$/.test(String(value))||Number(value)<5||Number(value)>1440)throw Error('Batas keterlambatan 5–1440 menit, tanpa titik.');write('minutes',value);}
   function toggle(user){const s=settings(user);write('enabled',s.enabled?'0':'1');}
+  function alertSettings(user){admin(user);return {enabled:read('incident_enabled','1')==='1'};}
+  function toggleAlerts(user){if(!staff.isOwner?.(user))throw Error('Hanya owner boleh mengatur peringatan gangguan.');write('incident_enabled',read('incident_enabled','1')==='1'?'0':'1');}
+  let alerting=false;
+  async function alertOwner(){if(alerting||!sendDM||read('incident_enabled','1')!=='1'||!db.prepare("SELECT 1 FROM sqlite_master WHERE name='bot_diagnostics'").get())return;alerting=true;
+    try{const groups=db.prepare("SELECT scope,MAX(seen_at) seen_ms,SUM(count) total_count FROM bot_diagnostics WHERE seen_at>? AND scope IN ('payment','provider','webhook','product_dm','product_poll') GROUP BY scope ORDER BY seen_ms DESC LIMIT 5").all(now()-24*3600000);
+      for(const owner of staff.ids().filter(id=>staff.isOwner?.(id)))for(const g of groups){if(!staff.isOwner(owner))break;const old=db.prepare('SELECT * FROM owner_incident_alerts WHERE scope=? AND owner_id=?').get(g.scope,owner);
+        if(old&&(g.seen_ms<=old.seen_ms&&g.total_count===old.total_count||old.sent_ms&&now()-old.sent_ms<15*60000||old.attempt_ms&&now()-old.attempt_ms<60000))continue;
+        db.prepare('INSERT INTO owner_incident_alerts(scope,owner_id,attempt_ms) VALUES(?,?,?) ON CONFLICT(scope,owner_id) DO UPDATE SET attempt_ms=excluded.attempt_ms').run(g.scope,owner,now());
+        try{const en=language(owner)==='en';await sendDM(owner,(en?'⚠️ Store incident':'⚠️ Gangguan toko')+'\n'+g.scope+'\n'+(en?'Latest event: ':'Kejadian terakhir: ')+'<t:'+Math.floor(g.seen_ms/1000)+':R>\n'+(en?'Open /admin → System → Data & Maintenance → Store Readiness → Incident Log. No automatic charge or refund is performed.':'Buka /admin → Sistem → Data & Pemeliharaan → Kesiapan Toko → Catatan Gangguan. Tidak ada pembayaran atau refund otomatis dari peringatan ini.'));
+          db.prepare('UPDATE owner_incident_alerts SET seen_ms=?,total_count=?,sent_ms=? WHERE scope=? AND owner_id=?').run(g.seen_ms,g.total_count,now(),g.scope,owner);
+        }catch{/* Failed owner DMs retry with a one-minute backoff. */}
+      }
+    }finally{alerting=false;}}
   const lateQuery=`SELECT 'digital_pending' kind,id ref,discord_id,updated_at since FROM manual_product_orders WHERE state='pending'
     UNION ALL SELECT 'digital_dm',id,discord_id,updated_at FROM manual_product_orders WHERE state IN ('completed','refunded') AND notified=0
     UNION ALL SELECT 'otp_review',invoice_id,discord_id,created_at FROM direct_purchases WHERE state IN ('review','processing')
@@ -27,7 +41,7 @@ function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspect
     }finally{reminding=false;}
   }
   let notifying=false;
-  async function poll(){await remindInvoices();if(notifying||!sendDM||read('enabled','1')!=='1')return;notifying=true;
+  async function poll(){await alertOwner();await remindInvoices();if(notifying||!sendDM||read('enabled','1')!=='1')return;notifying=true;
     try {for(const id of staff.ids().filter(x=>staff.isAdmin(x))){const query='SELECT q.* FROM ('+overdueQuery()+') q WHERE NOT EXISTS(SELECT 1 FROM overdue_notifications n WHERE n.kind=q.kind AND n.ref=q.ref AND n.admin_id=?) ORDER BY q.since LIMIT 5';
       for(const o of db.prepare(query).all(now()/1000,Number(read('minutes','15')),id)){
         if(!staff.isAdmin(id))break;
@@ -47,6 +61,10 @@ function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspect
     UNION ALL SELECT 'otp',d.invoice_id,'Pesanan OTP tidak cocok dengan pembayaran tercatat' FROM direct_purchases d LEFT JOIN topups p ON p.order_id=d.invoice_id WHERE d.state IN ('processing','review','fulfilled','refunded') AND (p.order_id IS NULL OR p.credited<>1 OR p.discord_id<>d.discord_id OR p.amount<>d.amount OR p.purpose<>'purchase')
     UNION ALL SELECT 'stock',CAST(s.id AS TEXT),'Data terjual tidak terhubung ke pesanan selesai' FROM manual_product_stock s WHERE s.state='sold' AND NOT EXISTS(SELECT 1 FROM manual_product_orders o WHERE o.id=s.order_id AND o.state='completed')`;
   const topupColumns=db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name);
+  const productColumns=db.prepare('PRAGMA table_info(manual_products)').all().map(c=>c.name);
+  const stockQuery="SELECT CAST(p.id AS TEXT) ref,'stock_capacity' kind,'Stok jual melebihi data siap kirim' reason,p.quantity sale_stock,(SELECT COUNT(*) FROM manual_product_stock s WHERE s.product_id=p.id AND s.state='available') ready_data FROM manual_products p WHERE p.deleted=0 AND p.enabled=1 AND p.auto_enabled=1 AND p.quantity IS NOT NULL AND p.quantity>(SELECT COUNT(*) FROM manual_product_stock s WHERE s.product_id=p.id AND s.state='available')"+(productColumns.includes('parent_id')?" AND (p.parent_id IS NULL OR EXISTS(SELECT 1 FROM manual_products root WHERE root.id=p.parent_id AND root.deleted=0 AND root.enabled=1))":'');
+  function stockIssues(user,p=0){admin(user);return page(stockQuery,[],p);}
+  findingsQuery+=' UNION ALL SELECT kind,ref,reason FROM ('+stockQuery+')';
   if(topupColumns.includes('provider_ref')&&topupColumns.includes('gateway'))findingsQuery+=" UNION ALL SELECT 'invoice',order_id,'Pembuatan invoice belum pasti; referensi gateway belum diterima' FROM topups WHERE gateway='tripay' AND status='creating' AND provider_ref IS NULL AND credited=0";
   function reconcile(user,p=0){admin(user);return page(findingsQuery,[],p);}
   async function readiness(user,guildId,channelId){admin(user);const dbOK=!!db.prepare('SELECT 1 ok').get().ok;
@@ -54,7 +72,7 @@ function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspect
     admin(user);
     const automatic=db.prepare(`SELECT COUNT(*) total,SUM(CASE WHEN p.quantity=0 OR NOT EXISTS(SELECT 1 FROM manual_product_stock s WHERE s.product_id=p.id AND s.state='available') THEN 1 ELSE 0 END) unready FROM manual_products p WHERE p.deleted=0 AND p.enabled=1 AND p.auto_enabled=1`).get();
     const issues=reconcile(user).count;let backup='Belum ada hasil tes pemulihan';if(db.prepare("SELECT 1 FROM sqlite_master WHERE name='shop_tools_settings'").get()){const at=db.prepare("SELECT value FROM shop_tools_settings WHERE key='backup_verified_at'").get()?.value;const tested=db.prepare("SELECT value FROM shop_tools_settings WHERE key='backup_verified_file'").get()?.value,current=db.prepare("SELECT value FROM shop_tools_settings WHERE key='backup_last'").get()?.value;if(at)backup=(tested===current?'Backup terbaru lolos tes: ':'Salinan sebelumnya lolos tes: ')+at;}
-    return {dbOK,backup,gateway:payments.configured?(payments.production?'Produksi — konfigurasi tersedia':'Sandbox / mode uji'):'Belum dikonfigurasi',provider:!!env.SMSCODE_API_TOKEN,webhook:!!(env.SMSCODE_WEBHOOK_URL&&env.SMSCODE_WEBHOOK_SECRET),channel,automatic:Number(automatic.total),unready:Number(automatic.unready||0),issues};
+    return {dbOK,backup,stockMismatch:stockIssues(user).count,gateway:payments.configured?(payments.production?'Produksi — konfigurasi tersedia':'Sandbox / mode uji'):'Belum dikonfigurasi',provider:!!env.SMSCODE_API_TOKEN,webhook:!!(env.SMSCODE_WEBHOOK_URL&&env.SMSCODE_WEBHOOK_SECRET),channel,automatic:Number(automatic.total),unready:Number(automatic.unready||0),issues};
   }
   async function testDM(user){admin(user);await sendDM(user,'✅ Tes DM admin berhasil. Tidak ada pembelian, pemotongan saldo, atau perubahan stok.');}
   async function recoverInvoice(user,invoice,reference){admin(user);invoice=String(invoice||'').trim();reference=String(reference||'').trim();if(!/^[a-zA-Z0-9_-]{1,100}$/.test(invoice)||! /^[a-zA-Z0-9_-]{1,100}$/.test(reference))throw Error('Isi ID invoice dan referensi TriPay yang valid dari dashboard merchant.');
@@ -66,7 +84,7 @@ function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspect
     if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shop_admin_audit'").get())db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(user,'Verifikasi referensi TriPay untuk invoice '+invoice);
     return updated;
   }
-  return {remindInvoices,recoverInvoice,errors:user=>{admin(user);return diagnostics?.recent()||[];},settings,configure,toggle,overdue,poll,reconcile,readiness,testDM};
+  return {stockIssues,alertSettings,toggleAlerts,alertOwner,remindInvoices,recoverInvoice,errors:user=>{admin(user);return diagnostics?.recent()||[];},settings,configure,toggle,overdue,poll,reconcile,readiness,testDM};
 }
 const label=k=>({paid_pending:'Pembayaran lunas, pesanan belum diproses',digital_pending:'Produk dibayar, menunggu admin',digital_dm:'Hasil produk / refund belum terkirim ke DM',otp_review:'Pembayaran OTP perlu diperiksa'}[k]||k);
 function createHealthHandler({discord,model,staff}){
@@ -80,7 +98,8 @@ function createHealthHandler({discord,model,staff}){
     await i.deferReply({ephemeral:true});
     try {
       if(id==='admin_healthcheck_invoice_save'){const p=await model.recoverInvoice(user,i.fields.getTextInputValue('invoice'),i.fields.getTextInputValue('reference'));await i.editReply({content:'Referensi diperiksa langsung melalui API TriPay. Status: '+p.status+'. Tidak membuat tagihan baru.',components:[row(b('admin_healthcheck_reconcile:0','Kembali'),home)]});
-      }else if(id==='admin_healthcheck_errors'){const rows=model.errors(user);await i.editReply({content:'**Catatan Gangguan Bot**\nMenyimpan 100 kelompok gangguan, menampilkan 10 terbaru. Token, secret dan isi akun tidak disimpan.\n\n'+(rows.map(r=>`${r.scope} • ${r.code} • ${r.count} kali\nReferensi: ${r.ref||'-'} • <t:${Math.floor(r.seen_at/1000)}:R>`).join('\n\n')||'Belum ada gangguan tercatat.'),allowedMentions:{parse:[]},components:[row(b('admin_healthcheck_errors','Perbarui'),b('admin_healthcheck','Kembali'),home)]});
+      }else if(id==='admin_healthcheck_errors'||id==='admin_healthcheck_alerts'){if(id==='admin_healthcheck_alerts')model.toggleAlerts(user);const rows=model.errors(user),alerts=model.alertSettings(user);await i.editReply({content:'**Catatan Gangguan Bot**\nPeringatan ke owner: '+(alerts.enabled?'Aktif':'Nonaktif')+' • maksimal sekali per jenis dalam 15 menit.\nToken, secret dan isi akun tidak disimpan.\n\n'+(rows.map(r=>`${r.scope} • ${r.code} • ${r.count} kali\nReferensi: ${r.ref||'-'} • <t:${Math.floor(r.seen_at/1000)}:R>`).join('\n\n')||'Belum ada gangguan tercatat.'),allowedMentions:{parse:[]},components:[row(b('admin_healthcheck_errors','Perbarui'),b('admin_healthcheck','Kembali'),home),...(staff.isOwner?.(user)?[row(b('admin_healthcheck_alerts',alerts.enabled?'Matikan Peringatan Owner':'Aktifkan Peringatan Owner'))]:[])]});
+      }else if(id.startsWith('admin_healthcheck_stock:')){const r=model.stockIssues(user,Number(id.split(':')[1]));await i.editReply({content:`**Pemeriksaan Stok Otomatis**\nHalaman ${r.page+1}/${r.pages} • ${r.count} produk\n\n`+(r.rows.map(x=>`Produk #${x.ref}: stok jual ${x.sale_stock}, data siap kirim ${x.ready_data}`).join('\n')||'Stok jual tidak melebihi data siap kirim pada produk otomatis aktif.')+'\nTidak mengubah stok atau data. Buka produk untuk memperbaiki konfigurasi.',allowedMentions:{parse:[]},components:[...(r.rows.length?[row(...r.rows.map(x=>b('admin_manual_delivery_data:'+x.ref+':0','Produk #'+x.ref,2)))]:[]),row(b('admin_healthcheck_stock:'+(r.page-1),'Sebelumnya').setDisabled(!r.page),b('admin_healthcheck_stock:'+(r.page+1),'Berikutnya').setDisabled(r.page===r.pages-1),b('admin_healthcheck','Kembali')),row(home)]});
       }else if(id.startsWith('admin_healthcheck_overdue:')||id==='admin_healthcheck_limit_save'||id==='admin_healthcheck_toggle'){
         if(id==='admin_healthcheck_limit_save')model.configure(user,i.fields.getTextInputValue('minutes'));if(id==='admin_healthcheck_toggle')model.toggle(user);
         const r=model.overdue(user,id.includes(':')?Number(id.split(':')[1]):0);
@@ -89,7 +108,7 @@ function createHealthHandler({discord,model,staff}){
         const r=model.reconcile(user,Number(id.split(':')[1]));await i.editReply({content:`**Pencocokan Catatan Transaksi**\nHalaman ${r.page+1}/${r.pages} • ${r.count} temuan\nPemeriksaan lokal; tidak mengubah saldo, status gateway, refund, atau stok.\n\n`+(r.count?r.rows.map(o=>`${o.reason}\nID: ${o.ref}`).join('\n\n'):'Tidak ada ketidakcocokan pada aturan yang diperiksa. Ini bukan rekonstruksi seluruh mutasi saldo atau konfirmasi langsung gateway.'),allowedMentions:{parse:[]},components:[row(b('admin_healthcheck_reconcile:'+(r.page-1),'Sebelumnya').setDisabled(!r.page),b('admin_healthcheck_reconcile:'+(r.page+1),'Berikutnya').setDisabled(r.page===r.pages-1),b('admin_healthcheck_reconcile:'+r.page,'Perbarui')),row(b('admin_healthcheck_invoice','Pulihkan Referensi TriPay')),row(b('admin_payment_issues','Periksa Pesanan'),b('admin_payment_checks','Kembali'),home)]});
       }else{
         let prefix='';if(id==='admin_healthcheck_dm'){await model.testDM(user);prefix='✅ Tes DM terkirim ke Anda.\n\n';}
-        const r=await model.readiness(user,i.guildId,i.channelId);await i.editReply({content:prefix+`**Kesiapan Toko**\nBackup: ${r.backup}\nDatabase: ${r.dbOK?'OK':'Perlu diperiksa'}\nQRIS: ${r.gateway}\nAPI SMSCode: ${r.provider?'Konfigurasi tersedia':'Belum diisi'}\nWebhook SMSCode: ${r.webhook?'Konfigurasi tersedia':'Belum lengkap'}\nChannel: ${r.channel}\nProduk otomatis aktif: ${r.automatic} • stok/data belum siap: ${r.unready}\nKetidakcocokan transaksi: ${r.issues}\n\nKonfigurasi tersedia belum membuktikan koneksi/API/webhook berhasil. Gunakan tes webhook yang sudah ada dan lakukan transaksi uji sesuai mode gateway. Tes DM admin tidak menjamin DM semua pembeli terbuka.`,components:[row(b('admin_healthcheck','Perbarui'),b('admin_healthcheck_dm','Tes DM Admin',3),b('admin_smscode_webhook_test','Tes Webhook SMSCode')),row(b('admin_healthcheck_errors','Catatan Gangguan'),b('admin_system_data','Kembali'),home)]});
+        const r=await model.readiness(user,i.guildId,i.channelId);await i.editReply({content:prefix+`**Kesiapan Toko**\nBackup: ${r.backup}\nDatabase: ${r.dbOK?'OK':'Perlu diperiksa'}\nQRIS: ${r.gateway}\nAPI SMSCode: ${r.provider?'Konfigurasi tersedia':'Belum diisi'}\nWebhook SMSCode: ${r.webhook?'Konfigurasi tersedia':'Belum lengkap'}\nChannel: ${r.channel}\nProduk otomatis aktif: ${r.automatic} • stok/data belum siap: ${r.unready}\nStok jual melebihi data: ${r.stockMismatch}\nKetidakcocokan transaksi: ${r.issues}\n\nKonfigurasi tersedia belum membuktikan koneksi/API/webhook berhasil. Gunakan tes webhook yang sudah ada dan lakukan transaksi uji sesuai mode gateway. Tes DM admin tidak menjamin DM semua pembeli terbuka.`,components:[row(b('admin_healthcheck','Perbarui'),b('admin_healthcheck_dm','Tes DM Admin',3),b('admin_smscode_webhook_test','Tes Webhook SMSCode')),row(b('admin_healthcheck_errors','Catatan Gangguan'),b('admin_healthcheck_stock:0','Periksa Stok'),b('admin_system_data','Kembali'),home)]});
       }
     }catch(e){await i.editReply({content:id==='admin_healthcheck_dm'?'Tes DM gagal. Aktifkan DM dari anggota server, lalu coba lagi.':String(e.message||'Pemeriksaan gagal.').slice(0,1700),components:[row(b(id.includes('overdue')||id.includes('reconcile')||id.includes('limit')||id.includes('toggle')?'admin_payment_checks':'admin_system_data','Kembali'),home)],allowedMentions:{parse:[]}});}
     return true;

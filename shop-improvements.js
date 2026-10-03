@@ -1,3 +1,15 @@
+// Shared presentation only: never changes financial or notifier flags.
+function orderProgress(o,kind='digital',payment=null){
+ const state=String(o.state||o.status||'').toLowerCase();
+ if(o.refunded||state==='refunded')return {payment:'refunded',delivery:'cancelled'};
+ if(['expired','expire','deny','cancel','canceled','cancelled','failure','failed'].includes(state))return {payment:'inactive',delivery:'cancelled'};
+ const paid=kind==='digital'?['pending','completed'].includes(state)||Boolean(payment?.credited):Boolean(o.provider_order_id)||Boolean(payment?.credited);
+ if(!paid)return {payment:'unpaid',delivery:'awaiting_payment'};
+ if(kind==='digital')return {payment:'paid',delivery:state==='completed'?(o.notified?'sent':'pending_dm'):'processing'};
+ const token=o.otp||(o.otp_message?'message:'+o.otp_message:null);
+ return {payment:'paid',delivery:token?(o.otp_notified===token?'sent':'pending_dm'):'waiting_otp'};
+}
+function progressText(p,en=false){const words=en?{paid:'Payment verified',unpaid:'Awaiting payment',refunded:'Refunded to balance',inactive:'Invoice/order inactive',sent:'Delivered via DM',pending_dm:'Ready; awaiting DM delivery',processing:'Awaiting admin delivery',waiting_otp:'Waiting for OTP',awaiting_payment:'Awaiting payment',cancelled:'Cancelled'}:{paid:'Pembayaran terverifikasi',unpaid:'Menunggu pembayaran',refunded:'Dikembalikan ke saldo',inactive:'Tagihan/pesanan tidak aktif',sent:'Berhasil dikirim ke DM',pending_dm:'Hasil tersedia; menunggu pengiriman DM',processing:'Menunggu pengiriman admin',waiting_otp:'Menunggu OTP',awaiting_payment:'Menunggu pembayaran',cancelled:'Dibatalkan'};return `${en?'Payment':'Pembayaran'}: ${words[p.payment]}\n${en?'Delivery':'Pengiriman'}: ${words[p.delivery]}`;}
 // Persistent panel locations and delivery diagnostics. Never store account/OTP bodies here.
 function createShopImprovements({db,staff,access,resolveChannel,now=Date.now}) {
   db.exec(`CREATE TABLE IF NOT EXISTS storefront_panels(guild_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,message_id TEXT NOT NULL);
@@ -94,4 +106,4 @@ function createImprovementsHandler({discord,model,products,operations,staff}){
     return true;
   };
 }
-module.exports={createShopImprovements,createImprovementsHandler};
+module.exports={createShopImprovements,createImprovementsHandler,orderProgress,progressText};

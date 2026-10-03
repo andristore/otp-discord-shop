@@ -76,6 +76,19 @@ for(const [source,target] of Object.entries({
   'Tekan Kirim Bukti Pembayaran untuk membuka formulir bukti pembayaran. Admin memeriksa mutasi sebelum menyetujui. Tekan Status Pengajuan untuk melihat hasilnya.':'Click Submit Payment Proof to open the form. The admin verifies the payment before approving it. Click Request Status to view the result.',
   'Data dikirim setelah pembayaran terverifikasi.':'Data is delivered once payment is verified.'
 }))phrases.set(source,target);
+for(const [source,target] of Object.entries({
+ 'Cari Pembeli & Transaksi':'Find Customer & Transaction','Username, ID pembeli, atau invoice':'Username, customer ID, or invoice','Hasil Pencarian Pembeli & Transaksi':'Customer & Transaction Search Results','Tidak ada akun yang cocok.':'No matching accounts.','Pilih pembeli untuk mengelola akun. Cari invoice yang lengkap agar hasil lebih tepat.':'Choose a customer to manage their account. Enter the full invoice for a more precise match.',
+ 'Periksa Stok':'Check Stock','Pemeriksaan Stok Otomatis':'Automatic Stock Check','Matikan Peringatan Owner':'Disable Owner Alerts','Aktifkan Peringatan Owner':'Enable Owner Alerts','Laporan Pesanan ke Channel':'Order Channel Reports','Channel Pesanan Selesai':'Completed Order Channel','Tes Channel':'Test Channel','Kirim Riwayat Lama':'Send Past Orders','Nonaktifkan':'Disable',
+ 'Pengiriman':'Delivery','Pembayaran terverifikasi':'Payment verified','Menunggu pembayaran':'Awaiting payment','Dikembalikan ke saldo':'Refunded to balance','Hasil tersedia; menunggu pengiriman DM':'Ready; awaiting DM delivery','Menunggu pengiriman admin':'Awaiting admin delivery','Berhasil dikirim ke DM':'Delivered via DM','Menunggu OTP':'Waiting for OTP','Dibatalkan':'Cancelled','Tagihan/pesanan tidak aktif':'Invoice/order inactive',
+ 'Produk tidak ditemukan.':'Product not found.','Pesanan tidak ditemukan.':'Order not found.','Tagihan tidak ditemukan.':'Invoice not found.','Pengajuan tidak ditemukan.':'Request not found.','Akses ditolak.':'Access denied.','Saldo tidak cukup. Isi saldo dahulu.':'Insufficient balance. Please top up first.',
+ 'Konfirmasi kedaluwarsa. Pilih produk kembali.':'This confirmation has expired. Select the product again.','Produk berubah atau nonaktif. Pilih kembali untuk melihat data terbaru.':'This product has changed or is inactive. Select it again for the latest details.','Toko sedang maintenance.':'The store is under maintenance.',
+ 'Stok produk habis.':'This product is out of stock.','Stok pesanan perlu diperiksa admin.':'An admin must check this order’s stock.','Pembayaran produk belum terverifikasi.':'Product payment has not been verified.','QRIS minimal 1.000 IDR. Gunakan saldo untuk harga lebih kecil.':'QRIS requires at least 1,000 IDR. Use balance for a lower price.',
+ 'Masukkan alamat email yang valid untuk tagihan QRIS.':'Enter a valid email address for the QRIS invoice.','Data pembayaran tidak sesuai tagihan.':'Payment details do not match this invoice.','Gateway tagihan tidak didukung.':'This invoice’s payment gateway is unsupported.','QRIS belum dikonfigurasi oleh admin.':'QRIS has not been configured by an admin.',
+ 'Pembelian tidak ditemukan.':'Purchase not found.','Konfirmasi tidak ditemukan atau kedaluwarsa.':'Purchase confirmation not found or expired.','Kontak admin server belum diatur oleh owner.':'The owner has not set an admin contact for this server.','Tekan Hubungi Admin untuk isi saldo melalui DM.':'Click Contact Admin to arrange a top-up via DM.',
+ 'QR belum tersedia. Hubungi admin untuk memeriksa riwayat tagihan.':'The QR is not available yet. Contact the admin to check the invoice history.','Hubungi admin jika status tagihan belum jelas.':'Contact the admin if the invoice status is unclear.',
+ 'Pindai QRIS untuk membayar.':'Scan the QRIS code to pay.','Menunggu pembayaran; jangan membayar tagihan lain untuk pesanan ini.':'Awaiting payment; do not pay a different invoice for this order.','Pembayaran diterima; menunggu provider.':'Payment received; awaiting the provider.','Tagihan tidak aktif. Pilih produk kembali untuk membuat tagihan baru.':'This invoice is inactive. Select the product again for a new invoice.'
+}))phrases.set(source,target);
+function errorText(value,en=false){const message=String(value?.message||value||'');if(!en)return message;const known=phrases.get(message);return known||'Unable to complete this action. Check the order or invoice before trying again. Contact the store admin if the issue persists.';}
 function text(value) {
   if(typeof value!=='string')return value;
   if(phrases.has(value))return phrases.get(value);
@@ -124,4 +137,4 @@ function createLanguages({db,staff}) {
   }
   return {get,set,selected,translate,attach,handle,onboard};
 }
-module.exports={createLanguages,text};
+module.exports={createLanguages,text,errorText};

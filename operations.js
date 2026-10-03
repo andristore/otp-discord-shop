@@ -27,6 +27,21 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
     if(!account)return null;
     return {account,orders:db.prepare('SELECT * FROM orders WHERE discord_id=? ORDER BY id DESC LIMIT 3').all(id),topups:db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 3").all(id)};
   }
+  const searches=new Map();
+  function search(user,key,page=0,query=null){
+    if(staff?!staff.isAdmin(user):!require('./admin').isDiscordAdmin(user,env.ADMIN_DISCORD_IDS||''))throw Error('Akses ditolak.');
+    for(const [k,s]of searches)if(now()-s.created>15*60000)searches.delete(k);
+    if(query!==null){query=String(query).trim().replace(/^@/,'');if(!query||query.length>100)throw Error('Isi username, ID pembeli, atau invoice maksimal 100 karakter.');
+      for(const [k,s]of searches)if(s.user===user)searches.delete(k);if(searches.size>=100)searches.delete(searches.keys().next().value);
+      key=require('node:crypto').randomUUID();searches.set(key,{user,query,created:now()});}
+    const session=searches.get(key);if(!session||session.user!==user)throw Error('Pencarian kedaluwarsa. Tekan Cari Pembeli kembali.');
+    const sources=[],args=[];
+    for(const [table,fields]of [['users',['discord_id']],['buyer_profiles',['username']],['orders',['provider_order_id','id']],['topups',['order_id']],['manual_product_orders',['id','invoice_id']],['direct_purchases',['invoice_id','provider_order_id']]]){
+      const cols=db.prepare('PRAGMA table_info('+table+')').all().map(c=>c.name),valid=fields.filter(f=>cols.includes(f));if(!cols.includes('discord_id')||!valid.length)continue;
+      sources.push('SELECT discord_id FROM '+table+' WHERE '+valid.map(f=>'instr(lower(CAST('+f+' AS TEXT)),lower(?))>0').join(' OR '));args.push(...valid.map(()=>session.query));}
+    const sql='SELECT u.discord_id,u.balance FROM users u WHERE u.discord_id IN ('+sources.join(' UNION ')+')',count=db.prepare('SELECT COUNT(*) n FROM ('+sql+')').get(...args).n,pages=Math.max(1,Math.ceil(count/5));page=Math.min(Math.max(Number.isSafeInteger(page)?page:0,0),pages-1);
+    return {key,query:session.query,page,pages,count,rows:db.prepare(sql+' ORDER BY u.discord_id LIMIT 5 OFFSET ?').all(...args,page*5)};
+  }
   let otpBusy=false,lowBusy=false,lastLow=-Infinity;
   async function pollOTP(providerOrderId=null) {
     if(otpBusy || !sendDM)return false;otpBusy=true;let success=true;
@@ -130,7 +145,7 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
       return db.prepare('SELECT * FROM admin_resolutions WHERE invoice_id=?').get(invoiceId);
     }catch(e){db.prepare("UPDATE direct_purchases SET state='review',error=? WHERE invoice_id=? AND state='resolving'").run(String(e.message).slice(0,500),invoiceId);throw e;}
   }
-  return {settings,saveManual,saveLow,buyer,issue,issues,resolve,pollOTP,pollLow};
+  return {search,settings,saveManual,saveLow,buyer,issue,issues,resolve,pollOTP,pollLow};
 }
 
 function createOperationsHandler({discord,ops}) {
@@ -157,7 +172,7 @@ function createOperationsHandler({discord,ops}) {
         const s=ops.settings();await i.showModal(modal('admin_ops_low_save','Peringatan Saldo Provider',[
           ['threshold','Peringatkan jika saldo di bawah (IDR)',9,String(s.lowThreshold)],['enabled','Status: 1 aktif, 0 nonaktif',1,s.lowEnabled?'1':'0']]));return true;
       }
-      if(id==='admin_ops_buyer') {await i.showModal(modal('admin_ops_buyer_find','Cari Pembeli',[['buyer','ID Discord pengguna pembeli',20]]));return true;}
+      if(id==='admin_ops_buyer') {await i.showModal(modal('admin_ops_buyer_find','Cari Pembeli & Transaksi',[['buyer','Username, ID pembeli, atau invoice',100]]));return true;}
       if(id.startsWith('admin_ops_attach:') || id.startsWith('admin_ops_refund:')) {
         const invoice=id.split(':')[1],r=ops.issue(invoice);
         if(!r || r.state!=='review'){await i.reply({ephemeral:true,content:'Tagihan sudah diselesaikan atau tidak ditemukan.'});return true;}
@@ -171,10 +186,11 @@ function createOperationsHandler({discord,ops}) {
     try {
       if(id==='admin_ops_manual_save') {ops.saveManual(i.user.id,i.fields.getTextInputValue('instructions'));await i.editReply({content:'✅ Petunjuk pembayaran manual tersimpan. Pembeli melihatnya saat Isi Saldo → Manual.'});}
       else if(id==='admin_ops_low_save') {ops.saveLow(i.user.id,i.fields.getTextInputValue('threshold').trim(),i.fields.getTextInputValue('enabled').trim());await i.editReply({content:'✅ Pengaturan peringatan saldo tersimpan. Peringatan dikirim melalui DM admin.'});}
-      else if(id==='admin_ops_buyer_find') {
-        const buyerId=i.fields.getTextInputValue('buyer').trim(),r=ops.buyer(buyerId);
-        await hydrateBuyers([buyerId]);
-        await i.editReply({content:r?`Pembeli: ${buyerLabel(buyerId)}\nID: ${buyerId}\nSaldo: **${money(r.account.balance)}**\n\n**Pesanan terakhir**\n${r.orders.map(o=>`#${o.provider_order_id} • ${money(o.amount)} • ${o.status}`).join('\n') || 'Belum ada.'}\n\n**Isi saldo QRIS terakhir**\n${r.topups.map(t=>`${money(t.amount)} • ${t.status}`).join('\n') || 'Belum ada.'}`:'Akun pembeli belum tersimpan.',allowedMentions:{parse:[]}});
+      else if(id==='admin_ops_buyer_find'||id.startsWith('admin_ops_buyer_page:')) {
+        const parts=id.split(':'),r=id==='admin_ops_buyer_find'?ops.search(i.user.id,null,0,i.fields.getTextInputValue('buyer')):ops.search(i.user.id,parts[1],Number(parts[2]));
+        await hydrateBuyers(r.rows.map(b=>b.discord_id));
+        const nav=buttons([['admin_ops_buyer_page:'+r.key+':'+(r.page-1),'Sebelumnya'],['admin_ops_buyer_page:'+r.key+':'+(r.page+1),'Berikutnya'],['admin_ops_buyer','Cari Lagi'],['admin_buyers_menu','Kembali']]);nav.components[0].setDisabled(!r.page);nav.components[1].setDisabled(r.page===r.pages-1);
+        await i.editReply({content:`**Hasil Pencarian Pembeli & Transaksi**\nHalaman ${r.page+1}/${r.pages} • ${r.count} akun\n\n`+(r.rows.map(b=>`${buyerLabel(b.discord_id)}\nSaldo: **${money(b.balance)}**`).join('\n\n')||'Tidak ada akun yang cocok.')+'\n\nPilih pembeli untuk mengelola akun. Cari invoice yang lengkap agar hasil lebih tepat.',allowedMentions:{parse:[]},components:[...(r.rows.length?[buttons(r.rows.map(b=>['admin_buyers_detail:'+b.discord_id,buyerLabel(b.discord_id,false).slice(0,80)]))]:[]),nav]});
       } else if(id==='admin_payment_issues' || id.startsWith('admin_ops_issues:')) {
         const r=ops.issues(Number(id.split(':')[1]) || 0);
         const components=r.rows.length?[buttons(r.rows.map(x=>['admin_ops_issue:'+x.invoice_id,`${money(x.amount)} • ${x.discord_id}`]))]:[];

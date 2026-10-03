@@ -1,3 +1,5 @@
+const {errorText}=require('./languages');
+const {orderProgress,progressText}=require('./shop-improvements');
 const safe=s=>String(s??'').replace(/([\\`*_~|<>\[\]])/g,'\\$1');
 const money=n=>Number(n||0).toLocaleString('id-ID')+' IDR';
 
@@ -80,11 +82,14 @@ function createOrderHistoryHandler({discord,model,payments,premium,language=()=>
     await i.editReply(view(i.user.id,Number(id.startsWith('manual_orders:')?parts[1]:parts[3]||0),filter,mode));
    }else{
     const o=model.detail(i.user.id,id.slice('history_detail:'.length)),components=[],actions=[];
-    let content=`**🧾 ${t(i.user.id,'Detail Pesanan','Order Details')} • ${safe(o.name)}**\n${t(i.user.id,'Invoice / bukti transaksi','Invoice / transaction receipt')}: ${safe(o.receipt)}\n${t(i.user.id,'Jenis','Type')}: ${o.kind==='otp'?'OTP':t(i.user.id,'Produk Digital','Digital Product')}\n${t(i.user.id,'Pembayaran','Payment')}: ${o.payment_method==='qris'?'QRIS':t(i.user.id,'Saldo','Balance')}\n${t(i.user.id,'Harga produk','Product price')}: **${money(o.amount)}**\n${t(i.user.id,'Status pesanan','Order status')}: ${safe(o.status)}\n${t(i.user.id,'Tanggal','Date')}: ${safe(o.created_at)} UTC`;
+    let content=`**🧾 ${t(i.user.id,'Detail Pesanan','Order Details')} • ${safe(o.name)}**\n${t(i.user.id,'Invoice / bukti transaksi','Invoice / transaction receipt')}: ${safe(o.receipt)}\n${t(i.user.id,'Jenis','Type')}: ${o.kind==='otp'?'OTP':t(i.user.id,'Produk Digital','Digital Product')}\n${t(i.user.id,'Metode pembayaran','Payment method')}: ${o.payment_method==='qris'?'QRIS':t(i.user.id,'Saldo','Balance')}\n${t(i.user.id,'Harga produk','Product price')}: **${money(o.amount)}**\n${t(i.user.id,'Status pesanan','Order status')}: ${safe(o.status)}\n${t(i.user.id,'Tanggal','Date')}: ${safe(o.created_at)} UTC`;
+    let verifiedPayment;
     if(o.invoice){let p;try{p=payments.get(o.invoice,i.user.id);}catch{}
+     verifiedPayment=p;
      if(p)content+=`\n${t(i.user.id,'Status pembayaran','Payment status')}: ${safe(p.status)}\n${t(i.user.id,'Biaya pembeli','Customer fee')}: ${money(p.fee_customer)}\n${t(i.user.id,'Total tagihan','Invoice total')}: ${money(p.total_charge??o.amount)}`;
      actions.push(button((o.kind==='digital'?'manual_invoice_check:':'direct_check:')+o.invoice,'Cek Pembayaran & Pesanan',3));
     }else content+='\n'+t(i.user.id,'Bukti pembayaran saldo internal toko.','Internal store balance payment receipt.');
+    content+='\n'+progressText(orderProgress(o,o.kind,verifiedPayment),language(i.user.id)==='en');
     if(o.kind==='digital'){
      if(o.state==='completed'&&o.delivery)content+=`\n\n**${t(i.user.id,'Data Produk','Product Data')}**\n${safe(o.delivery)}`;
      actions.push(button('manual_repeat:'+o.id,'Beli Lagi'));
@@ -101,7 +106,7 @@ function createOrderHistoryHandler({discord,model,payments,premium,language=()=>
     if(content.length>1900){const {EmbedBuilder}=discord;await i.editReply({content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('Detail Pesanan').setDescription(content),...guide],allowedMentions:{parse:[]},components});}
     else await i.editReply({content,embeds:guide,allowedMentions:{parse:[]},components});
    }
-  }catch(e){await i.editReply({content:e.message,embeds:[],allowedMentions:{parse:[]},components:[row(button('history_list:all:orders:0','Kembali'),button('shop_home','Menu Awal'))]});}
+  }catch(e){await i.editReply({content:errorText(e,language(i.user.id)==='en'),embeds:[],allowedMentions:{parse:[]},components:[row(button('history_list:all:orders:0','Kembali'),button('shop_home','Menu Awal'))]});}
   return true;
  };
 }
@@ -114,11 +119,14 @@ function createOrderChannel({db,staff,resolveChannel,send,now=Date.now}){
  const config=()=>db.prepare('SELECT * FROM order_channel_settings WHERE id=1').get();
  const owner=user=>{if(!staff.isOwner(user))throw Error('Pengaturan tujuan laporan hanya untuk owner.');};
  const columns=db.prepare('PRAGMA table_info(orders)').all().map(c=>c.name);
+ const digitalColumns=db.prepare('PRAGMA table_info(manual_product_orders)').all().map(c=>c.name);
+ const otpDelivery=columns.includes('otp_notified')?"CASE WHEN (COALESCE(o.otp,'')<>'' AND o.otp_notified=o.otp)"+(columns.includes('otp_message')?" OR (COALESCE(o.otp,'')='' AND COALESCE(o.otp_message,'')<>'' AND o.otp_notified='message:'||o.otp_message)":'')+" THEN 'sent' ELSE 'pending_dm' END":"'pending_dm'";
+ const digitalDelivery=digitalColumns.includes('notified')?"CASE WHEN m.notified=1 THEN 'sent' ELSE 'pending_dm' END":"'pending_dm'";
  const finished=`SELECT 'otp:'||o.id AS key,o.discord_id,COALESCE(NULLIF(o.product_name,''),p.name,'OTP') AS name,o.amount,o.created_at,
  COALESCE((SELECT d.invoice_id FROM direct_purchases d WHERE d.discord_id=o.discord_id AND d.provider_order_id=o.provider_order_id LIMIT 1),'SALDO-OTP-'||o.id) AS invoice,
- CASE WHEN EXISTS(SELECT 1 FROM direct_purchases d WHERE d.discord_id=o.discord_id AND d.provider_order_id=o.provider_order_id) THEN 'QRIS' ELSE 'Saldo' END AS method,'OTP' AS kind
+ CASE WHEN EXISTS(SELECT 1 FROM direct_purchases d WHERE d.discord_id=o.discord_id AND d.provider_order_id=o.provider_order_id) THEN 'QRIS' ELSE 'Saldo' END AS method,'OTP' AS kind,${otpDelivery} AS delivery_state
  FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE o.status IN ('OTP_RECEIVED','COMPLETED') ${columns.includes('refunded')?'AND o.refunded=0':''} ${columns.includes('is_owner_test')?'AND COALESCE(o.is_owner_test,0)=0':''}
- UNION ALL SELECT 'digital:'||m.id,m.discord_id,m.product_name,m.amount,m.created_at,COALESCE(m.invoice_id,'SALDO-PRODUK-'||m.id),CASE WHEN m.payment_method='qris' THEN 'QRIS' ELSE 'Saldo' END,'Produk Digital'
+ UNION ALL SELECT 'digital:'||m.id,m.discord_id,m.product_name,m.amount,m.created_at,COALESCE(m.invoice_id,'SALDO-PRODUK-'||m.id),CASE WHEN m.payment_method='qris' THEN 'QRIS' ELSE 'Saldo' END,'Produk Digital',${digitalDelivery}
  FROM manual_product_orders m WHERE m.state='completed'`;
  function discover(state='pending'){db.prepare('INSERT OR IGNORE INTO order_channel_receipts(order_key,state) SELECT key,? FROM ('+finished+')').run(state);}
  async function channel(guildId,channelId){const c=await resolveChannel(channelId);if(!c||c.guildId!==guildId||c.type!==0||!c.canReport)throw Error('Gunakan channel teks server yang bisa dilihat bot, dengan izin Kirim Pesan dan Embed Links.');return c;}
@@ -128,7 +136,7 @@ function createOrderChannel({db,staff,resolveChannel,send,now=Date.now}){
  const backfill=db.transaction(user=>{owner(user);if(!config().enabled)throw Error('Atur channel tujuan terlebih dahulu.');discover();db.prepare("UPDATE order_channel_receipts SET state='pending',attempt_ms=0 WHERE state='skipped'").run();return stats();});
  function stats(){return {config:config(),pending:db.prepare("SELECT COUNT(*) n FROM order_channel_receipts WHERE state='pending'").get().n,sent:db.prepare("SELECT COUNT(*) n FROM order_channel_receipts WHERE state='sent'").get().n};}
  function payload(o){let username;try{username=db.prepare('SELECT username FROM buyer_profiles WHERE discord_id=?').get(o.discord_id)?.username;}catch{}
- return {embeds:[{color:0x00a65a,title:'🧾 Pesanan Selesai',description:`Pembeli: ${username?'@'+safe(username)+' • ':''}${safe(o.discord_id)}\nProduk: ${safe(String(o.name).slice(0,180))}\nJenis: ${o.kind}\nHarga: ${money(o.amount)}\nPembayaran: ${o.method}\nInvoice: ${safe(String(o.invoice).slice(0,150))}\nStatus: Selesai\nDipesan: ${safe(o.created_at)} UTC`,footer:{text:'est. 2020 — Bot Otomatis 24/7'}}],allowedMentions:{parse:[]}};}
+ return {embeds:[{color:0x00a65a,title:'🧾 Pesanan Selesai',description:`Pembeli: ${username?'@'+safe(username)+' • ':''}${safe(o.discord_id)}\nProduk: ${safe(String(o.name).slice(0,180))}\nJenis: ${o.kind}\nHarga: ${money(o.amount)}\nPembayaran: ${o.method}\nInvoice: ${safe(String(o.invoice).slice(0,150))}\nStatus pesanan: Selesai\nPengiriman: ${o.delivery_state==='sent'?'Berhasil dikirim ke DM':'Hasil tersedia; pengiriman DM belum terkonfirmasi'}\nDipesan: ${safe(o.created_at)} UTC`,footer:{text:'est. 2020 — Bot Otomatis 24/7'}}],allowedMentions:{parse:[]}};}
  let busy=false;
  async function poll(){if(busy||!config().enabled)return;busy=true;try{discover();const rows=db.prepare("SELECT * FROM order_channel_receipts WHERE state='pending' AND attempt_ms<=? ORDER BY attempt_ms,order_key LIMIT 10").all(now()-60000);
  for(const r of rows){const cfg=config();if(!cfg.enabled)break;db.prepare('UPDATE order_channel_receipts SET attempt_ms=? WHERE order_key=?').run(now(),r.order_key);
