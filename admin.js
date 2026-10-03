@@ -68,8 +68,14 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audi
       ['admin_manual_orders:0','Pesanan Produk Manual'],['admin_store_requests:0','Pengajuan Manual'],['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']]);
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
       ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway']]);
-    if(id==='admin_system_menu')return menu('🛠️ Sistem','Akses, backup, dan pemantauan toko.',[
-      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel'],['admin_store_maintenance','Maintenance'],['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_health','Saldo Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook SMSCode'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_ops_low','Peringatan Saldo Provider']]);
+    if(id==='admin_system_menu')return menu('🛠️ Sistem','Pilih kategori pengaturan bot.',[
+      ['admin_system_access','Akses Bot'],['admin_system_provider','Provider & Webhook'],['admin_system_data','Data & Pemeliharaan']]);
+    if(id==='admin_system_access')return menu('🔐 Akses Bot','Kelola admin serta izin server, channel, dan role pengguna bot.',[
+      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel']], 'admin_system_menu');
+    if(id==='admin_system_provider')return menu('📱 Provider & Webhook','Saldo, pembelian owner, tes webhook, dan peringatan provider.',[
+      ['admin_health','Saldo Provider (Owner)'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook SMSCode'],['admin_ops_low','Peringatan Saldo']], 'admin_system_menu');
+    if(id==='admin_system_data')return menu('🗂️ Data & Pemeliharaan','Backup data, aktivitas admin, dan status operasional toko.',[
+      ['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_store_maintenance','Maintenance']], 'admin_system_menu');
   }
   async function buyerBalances(requested=0) {
     const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total FROM users').get();
@@ -156,7 +162,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audi
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(await buyerBalances(Number(i.customId.split(':')[1])));return true;
       }
-      if(['admin_catalog_menu','admin_catalog_provider','admin_catalog_manual','admin_catalog_promo','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu'].includes(i.customId)) {
+      if(['admin_catalog_menu','admin_catalog_provider','admin_catalog_manual','admin_catalog_promo','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu','admin_system_access','admin_system_provider','admin_system_data'].includes(i.customId)) {
         await i.update(section(i.customId));return true;
       }
       if(i.customId==='admin_topup_history' || i.customId==='admin_direct_history') {
