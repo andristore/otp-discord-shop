@@ -1,6 +1,6 @@
 # Shop.M — Bot Toko Produk Digital & OTP
 
-Bot Discord untuk menjual produk digital dan OTP SMSCode, dengan pembayaran saldo toko atau QRIS melalui TriPay/Midtrans.
+Bot Discord untuk menjual produk digital, OTP SMSCode, dan top up game otomatis melalui Digiflazz, dengan pembayaran saldo toko atau QRIS melalui TriPay/Midtrans.
 
 ## 1. Pasang atau perbarui
 
@@ -14,7 +14,7 @@ Bot Discord untuk menjual produk digital dan OTP SMSCode, dengan pembayaran sald
 
 **Jika penguatan Midtrans sebelumnya belum dipasang:** gunakan 5 file di atas ditambah `manual-products.js` dan `direct-payments.js` (total 7 file kode).
 
-Paket berisi **55 file: 27 modul runtime, 25 file tes, dan 3 panduan/konfigurasi**. File `.test.js` dipakai untuk pengujian. Catatan perubahan lengkap tersedia di `CARA_PASANG.txt`.
+Paket berisi **57 file: 28 modul runtime, 26 file tes, dan 3 panduan/konfigurasi**. File `.test.js` dipakai untuk pengujian. Catatan perubahan lengkap tersedia di `CARA_PASANG.txt`.
 
 ## 2. Variables utama
 
@@ -39,7 +39,7 @@ Simpan token/secret di Railway Variables. Jangan unggah `.env`, database pelangg
 | `/admin` | Panel admin terdaftar. |
 | `/ping` | Periksa respons bot, database, RAM, dan waktu berjalan; khusus admin. |
 
-**Pembeli:** Beli OTP, Produk Lainnya, Saldo, Pesanan, Isi Saldo, dan Bantuan. Riwayat pembelian digabung pada Pesanan. Minimal isi saldo **5.000 IDR**. Katalog produk digital hanya menampilkan nama; harga muncul pada detail/konfirmasi.
+**Pembeli:** Beli OTP, Produk Lainnya, **Top Up Game**, Saldo, Pesanan, Isi Saldo, dan Bantuan. Riwayat pembelian digabung pada Pesanan. Minimal isi saldo **5.000 IDR**. Katalog produk digital hanya menampilkan nama; harga muncul pada detail/konfirmasi.
 
 | Kategori admin | Fungsi utama |
 | --- | --- |
@@ -63,6 +63,20 @@ Buka **Admin → Toko → Produk Lainnya → Kelola Produk**.
 5. Gunakan **Pratinjau Pesan** atau **Tes Beli** sebelum menjual. Tes Beli mengirim contoh ke DM admin tanpa memakai saldo/stok atau mencatat penjualan.
 
 Satu data unik digunakan untuk satu pembelian. Stok jual dan data kirim disimpan terpisah. Pengiriman otomatis dilakukan setelah pembayaran terverifikasi; DM yang gagal masuk antrean percobaan ulang. Hapus Produk memakai konfirmasi dan tetap mempertahankan riwayat pesanan lama.
+
+
+## 4A. Aktifkan Top Up Game Digiflazz
+
+Isi Variables berikut di Railway:
+
+- `DIGIFLAZZ_USERNAME` — username koneksi API Buyer.
+- `DIGIFLAZZ_API_KEY` — API key Buyer.
+- `DIGIFLAZZ_WEBHOOK_SECRET` — secret webhook untuk verifikasi callback.
+- `DIGIFLAZZ_TESTING=true` saat pengujian; ubah `false` untuk produksi.
+- `DIGIFLAZZ_CATEGORY=Games` untuk menampilkan kategori game.
+- `DIGIFLAZZ_SYNC_MINUTES=15` untuk interval sinkron katalog.
+
+Atur webhook Digiflazz ke `https://DOMAIN-BOT/webhooks/digiflazz` dan gunakan secret yang sama dengan `DIGIFLAZZ_WEBHOOK_SECRET`. Setelah deploy, katalog disinkron otomatis dan menu **Top Up Game** muncul di `/shop`. Pembayaran Top Up Game menggunakan saldo bot; member dapat mengisi saldo melalui sistem yang sudah ada. Status gagal mengembalikan saldo otomatis, sedangkan status pending dicek ulang dan dapat diperbarui melalui webhook.
 
 ## 5. QRIS dan webhook
 
@@ -93,4 +107,4 @@ Untuk webhook SMSCode, isi `SMSCODE_WEBHOOK_URL=https://DOMAIN-BOT/webhooks/smsc
 4. Gunakan Kesiapan Toko, Pesanan Terlambat, Pencocokan Catatan, dan Catatan Gangguan untuk pemeriksaan.
 5. Atur backup owner melalui **Sistem → Data & Pemeliharaan**; unduh salinan terpisah dari volume bot.
 
-**Validasi kode terakhir: 348 tes lokal lulus, 27 modul runtime lolos sintaks.** Hasil ini belum memverifikasi akun Discord, Railway, atau gateway pengguna. Untuk menjalankan tes pada repository lengkap: `node --test *.test.js`.
+**Validasi paket ini:** 4 tes khusus Digiflazz lulus. Pemeriksaan sintaks dilakukan pada seluruh modul runtime. Validasi 348 tes lama tetap berasal dari paket sebelumnya dan perlu dijalankan pada repository lengkap yang memiliki dependency proyek. Hasil ini belum memverifikasi akun Discord, Railway, atau gateway pengguna. Untuk menjalankan tes pada repository lengkap: `node --test *.test.js`.

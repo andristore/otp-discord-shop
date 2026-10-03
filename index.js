@@ -34,6 +34,7 @@ const {HOME_ID,withHome,addHomeNavigation}=require("./navigation");
 const {createShopTools,createShopToolsHandler}=require("./shop-tools");
 const {createEfficiency,createEfficiencyHandler}=require("./efficiency");
 const {createStoreFeatures,createStoreFeatureHandler,REFUND_GUIDE}=require("./store-features");
+const {createDigiflazz,createDigiflazzHandler}=require("./digiflazz");
 const app = express();
 app.set("trust proxy",1);
 const webSecurity=require("./web-security").createWebSecurity();
@@ -277,6 +278,8 @@ const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAcces
 const languages=createLanguages({db,staff});
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM,resolveInfoChannel:async id=>{const c=await client.channels.fetch(id);if(!c)return null;const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);return {id:c.id,guildId:c.guildId,type:c.type,canInfo:!!p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages),send:payload=>c.send(payload)};}});
 manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
+const digiflazz=createDigiflazz({db,pricing,assertOpen:assertStoreOpen});
+digiflazz.mount(app);
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
@@ -331,6 +334,7 @@ async function startDiscord(){
       new ButtonBuilder().setCustomId("shop_orders").setLabel("Pesanan").setEmoji("📦").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary)
     ),new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("shop_games").setLabel("Top Up Game").setEmoji("🎮").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("shop_language:shop").setLabel("Bahasa / Language").setEmoji("🌐").setStyle(ButtonStyle.Primary)
     )];
@@ -366,6 +370,7 @@ async function startDiscord(){
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess,resolveChannel:id=>client.channels.fetch(id),resolveRole:async(guildId,roleId)=>(await client.guilds.fetch(guildId)).roles.fetch(roleId)});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments,language:id=>languages.get(id)});
   const handleStoreFeatures=createStoreFeatureHandler({discord:require("discord.js"),features:storeFeatures,staff});
+  const handleDigiflazz=createDigiflazzHandler({discord:require("discord.js"),model:digiflazz,getBalance});
   direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(languages.translate(withHome(handleDirect.status(row)),row.discord_id,'delivery'));});
   client.on("interactionCreate", async i=>{
     try {
@@ -383,7 +388,8 @@ async function startDiscord(){
       if(await handleOrderChannel(i))return;
       if(await handleImprovements(i))return;
       if(await handleStoreFeatures(i))return;
-      if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:|tool_coupon)/.test(String(i.customId || ''))){
+      if(await handleDigiflazz(i))return;
+      if(storeFeatures.maintenance() && /^(shop_products|shop_games|df_|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:|tool_coupon)/.test(String(i.customId || ''))){
         return i.reply({ephemeral:true,content:'🔧 Toko sedang maintenance. Pembelian baru dihentikan sementara. Pesanan, OTP, dan tagihan sebelumnya tetap tersedia.'});
       }
       if(await handleTools(i))return;
@@ -537,6 +543,10 @@ async function startDiscord(){
   });
 
   await client.login(process.env.DISCORD_TOKEN);
+  if(digiflazz.configured())digiflazz.sync().then(n=>console.log('Katalog Digiflazz tersinkron:',n)).catch(e=>console.error('Sinkron Digiflazz gagal:',e.message));
+  const digiflazzSyncMinutes=Math.max(5,Number(process.env.DIGIFLAZZ_SYNC_MINUTES)||15);
+  const digiflazzSync=setInterval(()=>{if(digiflazz.configured())digiflazz.sync().catch(e=>console.error('Sinkron Digiflazz gagal:',e.message));},digiflazzSyncMinutes*60000);digiflazzSync.unref();
+  const digiflazzPoll=setInterval(()=>digiflazz.poll().catch(e=>console.error('Poll Digiflazz gagal:',e.message)),30000);digiflazzPoll.unref();
   const orderChannelPoll=setInterval(()=>orderChannel.poll().catch(()=>console.error('Laporan channel pesanan gagal; periksa konfigurasi tujuan.')),30000);orderChannelPoll.unref();orderChannel.poll().catch(()=>console.error('Laporan channel pesanan gagal; periksa konfigurasi tujuan.'));
   const otpPoll=setInterval(()=>operations.pollOTP().catch(console.error),15000);otpPoll.unref();
   const lowPoll=setInterval(()=>operations.pollLow().catch(console.error),60000);lowPoll.unref();
