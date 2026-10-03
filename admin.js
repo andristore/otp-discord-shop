@@ -75,7 +75,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(id==='admin_payment_requests')return menu('Pesanan & Verifikasi','Proses pesanan dan bukti pembayaran manual.',[
       ['admin_manual_orders:0','Pesanan Produk'],['admin_store_requests:0','Pengajuan Saldo Manual']], 'admin_transactions_menu');
     if(id==='admin_payment_checks')return menu('Pemeriksaan Pembayaran','Periksa pembayaran bermasalah atau tertunda.',[
-      ['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda']], 'admin_transactions_menu');
+      ['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_dm_failed:0','DM Gagal']], 'admin_transactions_menu');
     if(id==='admin_payment_records')return menu('Riwayat & Petunjuk','Riwayat transaksi dan petunjuk pembayaran manual.',[
       ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']], 'admin_transactions_menu');
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
@@ -83,7 +83,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Pilih kategori pengaturan bot.',[
       ['admin_system_access','Akses Bot'],['admin_system_provider','Provider & Webhook'],['admin_system_data','Data & Pemeliharaan']]);
     if(id==='admin_system_access')return menu('🔐 Akses Bot','Kelola admin serta izin server, channel, dan role pengguna bot.',[
-      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel']], 'admin_system_menu');
+      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel'],['admin_shop_panel','Panel Toko']], 'admin_system_menu');
     if(id==='admin_system_provider')return menu('📱 Provider & Webhook','Saldo, pembelian owner, tes webhook, dan peringatan provider.',[
       ['admin_health','Saldo Provider (Owner)'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook SMSCode'],['admin_ops_low','Peringatan Saldo']], 'admin_system_menu');
     if(id==='admin_system_data')return menu('🗂️ Data & Pemeliharaan','Backup data, aktivitas admin, dan status operasional toko.',[

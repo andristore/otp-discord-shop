@@ -1,5 +1,5 @@
 const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
-function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.env,sendDM,now=()=>Date.now(),staff}) {
+function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.env,sendDM,now=()=>Date.now(),staff,language=()=>'id'}) {
   db.exec(`CREATE TABLE IF NOT EXISTS shop_operations_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS admin_resolutions(invoice_id TEXT PRIMARY KEY,admin_id TEXT NOT NULL,action TEXT NOT NULL,note TEXT NOT NULL,provider_order_id TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS admin_settings_audit(id INTEGER PRIMARY KEY,admin_id TEXT NOT NULL,setting TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
@@ -47,7 +47,8 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
           const latest=db.prepare('SELECT * FROM orders WHERE id=?').get(row.id);
           const token=latest.otp || (latest.otp_message?'message:'+latest.otp_message:null);
           if(!latest.refunded && token && latest.otp_notified!==token) {
-            await sendDM(latest.discord_id,`🔢 Hi, Belanja Produk Digital Yukk — OTP masuk\nOrder: ${latest.provider_order_id}\nNomor: ${latest.phone || '-'}\n${latest.otp?'OTP: '+latest.otp:'SMS: '+latest.otp_message}\nGunakan kode pada layanan yang Anda beli.`);
+            const en=language(latest.discord_id)==='en';
+            await sendDM(latest.discord_id,`🔢 Hi, Belanja Produk Digital Yukk — ${en?'OTP received':'OTP masuk'}\nOrder: ${latest.provider_order_id}\n${en?'Phone':'Nomor'}: ${latest.phone || '-'}\n${latest.otp?'OTP: '+latest.otp:'SMS: '+latest.otp_message}\n${en?'Use this code for the service you purchased.':'Gunakan kode pada layanan yang Anda beli.'}`,{kind:'otp',ref:String(latest.id)});
             db.prepare('UPDATE orders SET otp_notified=? WHERE id=?').run(token,latest.id);
           }
         }catch { success=false;/* Keep unsent OTP for a later DM retry and the buyer's Cek OTP button. */ }

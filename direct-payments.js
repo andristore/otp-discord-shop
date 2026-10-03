@@ -96,19 +96,20 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     order:row=>row.provider_order_id?db.prepare('SELECT * FROM orders WHERE provider_order_id=? AND discord_id=?').get(row.provider_order_id,row.discord_id):null,
     recent:userId=>db.prepare('SELECT * FROM direct_purchases WHERE discord_id=? ORDER BY created_at DESC,rowid DESC LIMIT 5').all(userId)};
 }
-function createDirectHandler({discord,direct,payments}) {
+function createDirectHandler({discord,direct,payments,language=()=>'id'}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
   const money=v=>Number(v).toLocaleString('id-ID')+' IDR';
-  function status(row) {const p=statusBody(row);return {...p,content:`Pembeli: ${buyerLabel(row.discord_id)}\n\n${p.content}`};}
+  const t=(user,id,en)=>language(user)==='en'?en:id;
+  function status(row) {const p=statusBody(row);return {...p,content:`${t(row.discord_id,'Pembeli: ','Customer: ')}${buyerLabel(row.discord_id)}\n\n${p.content}`};}
   function statusBody(row) {
-    const order=direct.order(row);
-    if(row.state==='fulfilled' && order?.refunded)return {content:`Pesanan ${order.provider_order_id} dibatalkan. ${money(order.amount)} sudah dikembalikan ke saldo bot.`,components:[]};
-    if(row.state==='fulfilled' && order)return {content:`✅ Pembayaran diterima dan pesanan berhasil.\nProduk: **${row.name}**\nHarga: **${money(row.amount)}**\nNomor: **${order.phone}**\nOrder: ${order.provider_order_id}`,components:[new ActionRowBuilder().addComponents(
+    const order=direct.order(row),user=row.discord_id;
+    if(row.state==='fulfilled' && order?.refunded)return {content:t(user,`Pesanan ${order.provider_order_id} dibatalkan. ${money(order.amount)} sudah dikembalikan ke saldo bot.`,`Order ${order.provider_order_id} cancelled. ${money(order.amount)} has been refunded to your store balance.`),components:[]};
+    if(row.state==='fulfilled' && order)return {content:t(user,`✅ Pembayaran diterima dan pesanan berhasil.\nProduk: **${row.name}**\nHarga: **${money(row.amount)}**\nNomor: **${order.phone}**\nOrder: ${order.provider_order_id}`,`✅ Payment received and order created.\nProduct: **${row.name}**\nPrice: **${money(row.amount)}**\nPhone: **${order.phone}**\nOrder: ${order.provider_order_id}`),components:[new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('check_otp:'+order.provider_order_id).setLabel('Cek OTP').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('cancel_order:'+order.provider_order_id).setLabel('Batalkan').setStyle(ButtonStyle.Danger))]};
-    if(row.state==='refunded')return {content:`Pembelian tidak dapat dilanjutkan. **${money(row.amount)} dikembalikan ke saldo bot**, bukan rekening pembayaran. ${row.error}`,components:[]};
-    if(row.state==='review')return {content:`Pembayaran diterima. Admin perlu memeriksa pesanan. Jangan membayar ulang.\nTagihan: ${row.invoice_id}`,components:[]};
-    return {content:row.state==='processing'?'Pembayaran diterima. Pesanan sedang dibuat.':'Menunggu konfirmasi pembayaran QRIS.',components:[checkRow(row.invoice_id)]};
+    if(row.state==='refunded')return {content:t(user,`Pembelian tidak dapat dilanjutkan. **${money(row.amount)} dikembalikan ke saldo bot**, bukan rekening pembayaran. ${row.error}`,`Unable to complete this purchase. **${money(row.amount)} refunded to your store balance**, not your payment account. ${row.error||''}`),components:[]};
+    if(row.state==='review')return {content:t(user,`Pembayaran diterima. Admin perlu memeriksa pesanan. Jangan membayar ulang.\nTagihan: ${row.invoice_id}`,`Payment received. An admin needs to review this order. Do not pay again.\nInvoice: ${row.invoice_id}`),components:[]};
+    return {content:row.state==='processing'?t(user,'Pembayaran diterima. Pesanan sedang dibuat.','Payment received. Creating your order.'):t(user,'Menunggu konfirmasi pembayaran QRIS.','Awaiting QRIS payment confirmation.'),components:[checkRow(row.invoice_id)]};
   }
   function checkRow(id){return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('direct_check:'+id).setLabel('Cek Pembayaran & Pesanan').setStyle(ButtonStyle.Success));}
   async function handler(i) {
