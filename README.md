@@ -1,4 +1,4 @@
-# OTP Discord Shop — SMSCode + UI profesional
+# Discord Shop — SMSCode + UI profesional
 
 Bot toko Discord berbasis tombol dan dropdown.
 
