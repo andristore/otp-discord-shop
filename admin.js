@@ -1,3 +1,4 @@
+const {storageText}=require('./storage-health');
 const {ownerOnly,privateMenu}=require('./owner-privacy');
 const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
 let staffAccess;
@@ -121,7 +122,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         new ButtonBuilder().setCustomId('admin_reports_menu').setLabel('Laporan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Sistem').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
-        ...(staff?.isOwner?.(user)?[new ButtonBuilder().setCustomId('admin_digiflazz').setLabel('Digiflazz (Owner)').setStyle(ButtonStyle.Primary)]:[]),
+        ...(staff?.isOwner?.(user)?[new ButtonBuilder().setCustomId('admin_digiflazz').setLabel('Digiflazz (Owner)').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_upgrade_check_menu').setLabel('Cek Akun Game (Owner)').setStyle(ButtonStyle.Primary)]:[]),
         new ButtonBuilder().setCustomId(staff?.isOwner?.(user)?'admin_upgrade_dashboard':'admin_eff_summary').setLabel(staff?.isOwner?.(user)?'Dashboard Owner':'Ringkasan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('shop_language:admin').setLabel('Bahasa / Language').setStyle(ButtonStyle.Primary)
@@ -180,11 +181,11 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(command) { await i.reply({ephemeral:true,...privateMenu(home(i.user.id),isOwner(i.user.id))}); return true; }
     if(pingCommand || i.isButton()) {
       if(pingCommand || i.customId==='admin_bot_ping'){
-        const started=Date.now();await i.deferReply({ephemeral:true});const metrics=measureHealth();
+        const started=Date.now();await i.deferReply({ephemeral:true});const metrics=await measureHealth();
         if(!isDiscordAdmin(i.user.id))throw Error('Akses admin sudah dicabut.');
         const ms=n=>Number.isFinite(n)&&n>=0?n.toFixed(1)+' ms':'Belum tersedia';
         const ping=metrics.discord,quality=!Number.isFinite(ping)||ping<0?'Menunggu koneksi':ping<150?'Cepat':ping<300?'Cukup responsif':'Latensi tinggi';
-        await i.editReply({content:`**📡 Ping & Kecepatan Bot**\nKoneksi Discord: **${ms(ping)}** • ${quality}\nProses hingga respons awal: **${ms(Date.now()-started)}**\nAkses database: **${ms(metrics.database)}**\nRAM proses: **${Number.isFinite(metrics.ram)?metrics.ram.toFixed(1)+' MB':'Belum tersedia'}**\nWaktu berjalan: **${Math.floor(process.uptime()/60)} menit**\n\nLatensi lebih rendah berarti respons lebih cepat. Nilai koneksi berasal dari heartbeat Discord.`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_bot_ping').setLabel('Tes Ulang').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_data').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
+        await i.editReply({content:`**📡 Ping & Kecepatan Bot**\nKoneksi Discord: **${ms(ping)}** • ${quality}\nProses hingga respons awal: **${ms(Date.now()-started)}**\nAkses database: **${ms(metrics.database)}**\nRAM proses: **${Number.isFinite(metrics.ram)?metrics.ram.toFixed(1)+' MB':'Belum tersedia'}**\nWaktu berjalan: **${Math.floor(process.uptime()/60)} menit**${storageText(metrics.storage)}\n\nLatensi lebih rendah berarti respons lebih cepat. Nilai koneksi berasal dari heartbeat Discord.`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_bot_ping').setLabel('Tes Ulang').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_data').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
       }
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(await buyerBalances(Number(i.customId.split(':')[1]),i.customId.split(':')[2]||'all'));return true;

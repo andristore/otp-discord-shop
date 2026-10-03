@@ -1,4 +1,5 @@
-const {createShopUpgrades,createShopUpgradesHandler}=require('./shop-upgrades');
+const {createStorageHealth}=require('./storage-health');
+const {createShopUpgrades,createShopUpgradesHandler,createBuyerGameCheckHandler}=require('./shop-upgrades');
 const {protectOwnerInteraction}=require('./owner-privacy');
 require("dotenv").config();
 const express = require("express");
@@ -338,6 +339,8 @@ async function startDiscord(){
       new ButtonBuilder().setCustomId("shop_balance").setLabel("Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("shop_orders").setLabel("Pesanan").setEmoji("📦").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("buyer_game_check_menu").setLabel("Cek Akun Game").setEmoji("🔎").setStyle(ButtonStyle.Primary)
+    ),new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("shop_language:shop").setLabel("Bahasa / Language").setEmoji("🌐").setStyle(ButtonStyle.Primary)
     )];
@@ -346,6 +349,7 @@ async function startDiscord(){
   const efficiency=createEfficiency({db,staff});
   const toolkit=createShopTools({db,staff,language:id=>languages.get(id),payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
   const shopHealth=createShopHealth({diagnostics,db,staff,payments,language:id=>languages.get(id),products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
+  const handleBuyerGameCheck=createBuyerGameCheckHandler({discord:require("discord.js"),model:upgrades});
   const handleUpgrades=createShopUpgradesHandler({discord:require("discord.js"),model:upgrades,staff,tools:toolkit,digiflazz,smscode,efficiency});
   const upgradeAlertsPoll=setInterval(()=>upgrades.pollAlerts().catch(console.error),60000);upgradeAlertsPoll.unref();upgrades.pollAlerts().catch(console.error);
   const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
@@ -357,7 +361,8 @@ async function startDiscord(){
   commerce.setCoupons(toolkit.coupons);
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
-  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024};},audit:toolkit.audit});
+  const measureStorage=createStorageHealth({databasePath,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups"),volumePath:process.env.RAILWAY_VOLUME_MOUNT_PATH,appDir:__dirname});
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:async()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024,storage:await measureStorage()};},audit:toolkit.audit});
   const premiumProducts=createPremiumProducts({db,staff,language:id=>languages.get(id),products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));}});
   const handlePremiumProducts=createPremiumProductsHandler({discord:require("discord.js"),language:id=>languages.get(id),model:premiumProducts,products:manualProducts,staff});
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,language:id=>languages.get(id),sendDM:async(id,payload,order)=>{const send=async()=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));};if(order)await improvements.send("digital",order.id,id,send);else await send();}});
@@ -390,6 +395,7 @@ async function startDiscord(){
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
+      if(await handleBuyerGameCheck(i))return;
       if(await handleUpgrades(i))return;
       if(i.customId==='admin_balance_save'&&!staff.isOwner(i.user.id)&&upgrades.settings().approvalThreshold>0&&Number(i.fields.getTextInputValue('amount'))>=upgrades.settings().approvalThreshold){await i.deferReply({ephemeral:true});const p=await upgrades.requestCredit(i);await i.editReply({content:'Pengajuan '+p.id+' menunggu owner di Dashboard Owner → Pengajuan Saldo. Saldo belum ditambahkan.',allowedMentions:{parse:[]}});return;}
       if(await handleHealth(i))return;
