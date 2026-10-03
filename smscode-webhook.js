@@ -39,29 +39,46 @@ function createSMSCodeWebhook({db,operations,env=process.env,now=()=>Date.now()}
   }
   return {receive,drain,mount:app=>app.post('/webhooks/smscode',receive)};
 }
+function httpCode(value){const n=Number(value);return Number.isInteger(n)&&n>=100&&n<=599?n:'tidak diketahui';}
+async function providerRequest(fetchImpl,url,options,stage){
+  let res;
+  try{res=await fetchImpl(url,{...options,signal:AbortSignal.timeout(15000)});}catch(e){
+    const code=e?.cause?.code||e?.code;
+    const reason=['TimeoutError','AbortError'].includes(e?.name)||code==='ETIMEDOUT'?'Koneksi melewati batas waktu 15 detik.':code==='ENOTFOUND'?'Alamat API provider tidak dapat ditemukan (DNS).':'Koneksi ke API provider gagal.';
+    throw Error(stage+': '+reason+' Periksa koneksi Railway dan SMSCODE_API_BASE_URL.');
+  }
+  const status=httpCode(res.status),label=stage+' — API SMSCode HTTP '+status;
+  if(!res.ok){
+    const hint=status===401?'Periksa SMSCODE_API_TOKEN.':status===403?'Periksa izin API akun SMSCode.':status===429?'Batas permintaan provider tercapai. Tunggu sebelum mencoba kembali.':status>=500?'Provider mengembalikan kesalahan server. Coba lagi setelah layanan pulih.':'Permintaan ditolak. Periksa konfigurasi API provider.';
+    throw Error(label+'. '+hint);
+  }
+  let result;try{result=await res.json();}catch{throw Error(label+'. Respons provider bukan JSON yang valid.');}
+  if(result?.success!==true)throw Error(label+'. Provider melaporkan tes/permintaan tidak berhasil.'+(result?.data?.status_code!==undefined?' Pengiriman ke bot HTTP '+httpCode(result.data.status_code)+'.':''));
+  return result;
+}
+function checkDelivery(result){
+  const status=httpCode(result.data?.status_code);
+  if(status!==200)throw Error('Tes webhook belum mendapat HTTP 200. Pengiriman SMSCode ke bot HTTP '+status+'. '+(status===401?'Periksa kesamaan secret webhook.':status===404?'Periksa path /webhooks/smscode pada domain publik Railway.':'Periksa domain publik HTTPS dan deployment Railway.'));
+}
 async function configureSMSCodeWebhook({env=process.env,fetchImpl=fetch}={}){
   const url=env.SMSCODE_WEBHOOK_URL,secret=env.SMSCODE_WEBHOOK_SECRET,token=env.SMSCODE_API_TOKEN;
   if(!url||!secret||!token)throw Error('Isi SMSCODE_WEBHOOK_URL, SMSCODE_WEBHOOK_SECRET, dan SMSCODE_API_TOKEN di Railway.');
   const parsed=new URL(url);if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.pathname!=='/webhooks/smscode'||parsed.search||parsed.hash)throw Error('URL harus HTTPS dan berakhir /webhooks/smscode.');
   const base=(env.SMSCODE_API_BASE_URL||'https://api.smscode.gg/v1').replace(/\/$/,'');
   const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
-  const configured=await fetchImpl(base+'/webhook',{method:'PATCH',headers,body:JSON.stringify({webhook_url:url,webhook_secret:secret}),signal:AbortSignal.timeout(15000)});
-  const config=await configured.json();if(!configured.ok||config.success!==true)throw Error('SMSCode menolak konfigurasi webhook. Periksa API token dan URL.');
-  const tested=await fetchImpl(base+'/webhook/test',{method:'POST',headers,signal:AbortSignal.timeout(15000)});
-  const result=await tested.json();if(!tested.ok||result.success!==true||Number(result.data?.status_code)!==200)throw Error('Konfigurasi tersimpan, tetapi tes webhook belum mendapat HTTP 200. Periksa domain, deployment, dan secret Railway.');
+  await providerRequest(fetchImpl,base+'/webhook',{method:'PATCH',headers,body:JSON.stringify({webhook_url:url,webhook_secret:secret})},'Simpan konfigurasi');
+  const result=await providerRequest(fetchImpl,base+'/webhook/test',{method:'POST',headers},'Jalankan tes webhook');
+  checkDelivery(result);
   return {status:200};
 }
 async function testSMSCodeWebhook({env=process.env,fetchImpl=fetch}={}){
   if(!env.SMSCODE_API_TOKEN||!env.SMSCODE_WEBHOOK_URL||!env.SMSCODE_WEBHOOK_SECRET)throw Error('Lengkapi SMSCODE_API_TOKEN, SMSCODE_WEBHOOK_URL, dan SMSCODE_WEBHOOK_SECRET di Railway.');
   const base=(env.SMSCODE_API_BASE_URL||'https://api.smscode.gg/v1').replace(/\/$/,''),headers={Authorization:'Bearer '+env.SMSCODE_API_TOKEN};
-  let config;
-  try{const res=await fetchImpl(base+'/webhook',{headers,signal:AbortSignal.timeout(15000)});config=await res.json();if(!res.ok||config.success!==true)throw Error();}catch{throw Error('Tidak dapat membaca konfigurasi webhook SMSCode. Periksa API token dan koneksi provider.');}
+  const config=await providerRequest(fetchImpl,base+'/webhook',{headers},'Baca konfigurasi webhook');
   if(config.data?.webhook_url!==env.SMSCODE_WEBHOOK_URL)throw Error('URL webhook SMSCode belum sesuai Railway. Jalankan node smscode-webhook.js di Console Railway untuk mendaftarkannya.');
   if(config.data?.webhook_secret!==env.SMSCODE_WEBHOOK_SECRET)throw Error('Secret webhook SMSCode belum sesuai Railway. Jalankan node smscode-webhook.js di Console Railway untuk menyamakan konfigurasi.');
-  let result;
-  try{const res=await fetchImpl(base+'/webhook/test',{method:'POST',headers,signal:AbortSignal.timeout(15000)});result=await res.json();if(!res.ok||result.success!==true)throw Error();}catch{throw Error('SMSCode belum dapat menjalankan tes webhook. Periksa koneksi/API token atau tunggu sebelum mencoba ulang.');}
-  const status=Number(result.data?.status_code);
-  if(status!==200)throw Error(`Tes webhook belum berhasil (HTTP ${Number.isInteger(status)&&status>=100&&status<=599?status:'tidak diketahui'}). Periksa domain publik HTTPS, deployment, dan secret Railway.`);
+  const result=await providerRequest(fetchImpl,base+'/webhook/test',{method:'POST',headers},'Jalankan tes webhook');
+  checkDelivery(result);
   return {status:200};
 }
 function createSMSCodeWebhookHandler({staff,runTest=()=>testSMSCodeWebhook(),now=()=>Date.now()}){

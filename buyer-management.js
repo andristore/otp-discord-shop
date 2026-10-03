@@ -28,7 +28,7 @@ function createBuyerManagement({db,staff,now=Date.now}){
   if(action==='deleted'&&!staff.isOwner(user))throw Error('Hanya owner boleh menghapus pembeli dari daftar.');
   const r=detail(user,target);
   if(action==='deleted'){
-   if(staff.isOwner(target))throw Error('Akun owner tidak dapat dihapus atau diarsipkan.');
+   if(staff.isOwner(target)||staff.isAdmin(target))throw Error('Akun owner dan admin tidak dapat dihapus dari daftar pembeli.');
    if(r.balance!==0)throw Error('Saldo harus 0 IDR. Saldo pembeli tidak boleh dihapus.');
    if(r.busy)throw Error('Masih ada pesanan, pembayaran, pengajuan, atau pengiriman yang belum selesai.');
   }
@@ -54,7 +54,7 @@ function createBuyerManagementHandler({discord,model,staff}){
  const {ActionRowBuilder,ButtonBuilder}=discord;
  const button=(id,label,style=1)=>new ButtonBuilder().setCustomId(id).setLabel(label.slice(0,80)).setStyle(style);
  const row=(...items)=>new ActionRowBuilder().addComponents(...items);
- const back=()=>row(button('admin_buyers_list:active:0','Kelola Pembeli'),button('admin_home','Menu Awal Admin'));
+ const back=()=>row(button('admin_buyers_menu','Kelola Pembeli',2),button('admin_home','Menu Awal Admin'));
  const money=n=>Number(n||0).toLocaleString('id-ID')+' IDR';
  return async i=>{
   const id=String(i.customId||'');if(!id.startsWith('admin_buyers_'))return false;
@@ -62,17 +62,19 @@ function createBuyerManagementHandler({discord,model,staff}){
   await i.deferReply({ephemeral:true});
   try{
    const [key,arg,extra]=id.split(':'),user=i.user.id;
-   if(key==='admin_buyers_list'){
+   if(key==='admin_buyers_menu'){
+    await i.editReply({content:'**Kelola Pembeli**\nPilih Pengguna Bot untuk melihat akun aktif, arsip, atau akun yang dihapus. Saldo dan pencarian pembeli tersedia di kategori ini.',components:[row(button('admin_buyers_list:active:0','Pengguna Bot',2),button('admin_balances:0','Daftar Saldo',2),button('admin_ops_buyer','Cari Pembeli',2)),row(button('admin_balance_menu','Kembali'),button('admin_home','Menu Awal Admin'))]});
+   }else if(key==='admin_buyers_list'){
     const r=model.list(user,Number(extra||0),arg||'active'),components=[];
     if(r.rows.length)components.push(row(...r.rows.map(b=>button('admin_buyers_detail:'+b.discord_id,buyerLabel(b.discord_id,false)+' • '+money(b.balance),2))));
     components.push(row(...['active','archived','deleted'].map(k=>button('admin_buyers_list:'+k+':0:filter',{active:'Aktif',archived:'Arsip',deleted:'Dihapus'}[k]).setDisabled(k===r.filter))));
-    components.push(row(button(`admin_buyers_list:${r.filter}:${r.page-1}`,'Sebelumnya').setDisabled(!r.page),button(`admin_buyers_list:${r.filter}:${r.page+1}`,'Berikutnya').setDisabled(r.page===r.pages-1),button('admin_balance_menu','Kembali'),button('admin_home','Menu Awal Admin')));
+    components.push(row(button(`admin_buyers_list:${r.filter}:${r.page-1}`,'Sebelumnya').setDisabled(!r.page),button(`admin_buyers_list:${r.filter}:${r.page+1}`,'Berikutnya').setDisabled(r.page===r.pages-1),button('admin_buyers_menu','Kembali'),button('admin_home','Menu Awal Admin')));
     await i.editReply({content:`**Kelola Pembeli • ${{active:'Aktif',archived:'Arsip',deleted:'Dihapus'}[r.filter]}**\nHalaman ${r.page+1}/${r.pages} • ${r.count} akun\nArsip otomatis: semua akun pembeli setelah 30 hari tidak memakai bot. Saldo dan transaksi tetap tersimpan; hitungan diulang saat aktif kembali.\nPenghapusan hanya menyembunyikan akun; riwayat tetap tersimpan.`,allowedMentions:{parse:[]},components});
    }else if(key==='admin_buyers_detail'){
     const b=model.detail(user,arg),buttons=[];
     if(b.state==='active')buttons.push(button('admin_buyers_confirm:'+arg+':archived','Arsipkan Pembeli'));
     else buttons.push(button('admin_buyers_apply:'+arg+':active','Pulihkan Pembeli',3));
-    if(b.state!=='deleted'&&staff.isOwner(user))buttons.push(button('admin_buyers_confirm:'+arg+':deleted','Hapus Pembeli',4));
+    if(b.state!=='deleted'&&staff.isOwner(user)&&!staff.isOwner(arg)&&!staff.isAdmin(arg))buttons.push(button('admin_buyers_confirm:'+arg+':deleted','Hapus Pembeli',4));
     await i.editReply({content:`**${buyerLabel(arg,false)}**\nID: ${arg}\nSaldo: **${money(b.balance)}**\nStatus: ${b.state}\nTerakhir aktif di bot: ${b.last_active?new Date(b.last_active).toISOString():'Belum tercatat'}\nProses tertunda: ${b.busy?'Ada':'Tidak ada'}\n\nMenghapus atau mengarsipkan tidak menghapus transaksi. Akun aktif kembali bila pembeli memakai bot lagi.`,allowedMentions:{parse:[]},components:[row(...buttons),back()]});
    }else if(key==='admin_buyers_confirm'){
     model.detail(user,arg);if(!['archived','deleted'].includes(extra))throw Error('Aksi tidak dikenal.');if(extra==='deleted'&&!staff.isOwner(user))throw Error('Hanya owner boleh menghapus pembeli.');
