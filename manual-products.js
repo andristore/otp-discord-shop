@@ -3,7 +3,7 @@ const {buyerLabel}=require('./buyer-profiles');
 const money=n=>`${Number(n).toLocaleString('id-ID')} IDR`;
 const safe=s=>String(s || '').replace(/([\\`*_~|<>\[\]])/g,'\\$1');
 
-function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payments}) {
+function createManualProducts({diagnostics,db,staff,audit=()=>{},maintenance=()=>false,payments}) {
   db.exec(`CREATE TABLE IF NOT EXISTS manual_products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,description TEXT NOT NULL,
     price INTEGER NOT NULL,enabled INTEGER NOT NULL DEFAULT 1);
@@ -115,7 +115,7 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
     return getOrder(user,token);
   });
   async function notify(o){if(!notifier || o.notified || notifying.has(o.id) || !['completed','refunded'].includes(o.state))return;notifying.add(o.id);
-    try{await notifier(o);db.prepare('UPDATE manual_product_orders SET notified=1 WHERE id=?').run(o.id);}catch{}finally{notifying.delete(o.id);}}
+    try{await notifier(o);db.prepare('UPDATE manual_product_orders SET notified=1 WHERE id=?').run(o.id);}catch{diagnostics?.record('product_dm','FAILED',o.id);console.warn('Pengiriman DM produk belum berhasil; pesanan',o.id,'akan dicoba ulang.');}finally{notifying.delete(o.id);}}
   const settle=db.transaction(payment=>{const o=db.prepare('SELECT * FROM manual_product_orders WHERE invoice_id=?').get(payment.order_id),p=payments?.get(payment.order_id,payment.discord_id);
     if(!o || !p?.credited || p.purpose!=='purchase' || p.discord_id!==o.discord_id || p.amount!==o.amount || o.payment_method!=='qris')throw Error('Pembayaran produk belum terverifikasi.');
     if(o.state==='awaiting_payment'){db.prepare("UPDATE manual_product_orders SET state='pending',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(o.id);deliverStock(o);}return getOrder(o.discord_id,o.id);
@@ -130,13 +130,13 @@ function createManualProducts({db,staff,audit=()=>{},maintenance=()=>false,payme
   async function createQR(user,token,customer){if(!payments?.configured)throw Error('QRIS belum aktif.');require('./payments').parseCustomerEmail(customer.email);
     const r=reserveInvoice(user,token);if(!r.created)return {order:r.order,payment:payments.get(r.order.invoice_id,user)};
     try{const p=await payments.create(user,r.order.amount,{...customer,purpose:'purchase',orderId:r.order.invoice_id});if(p.credited)await fulfillPayment(p);return {order:getOrder(user,token),payment:p};}
-    catch{throw Error('Tagihan tersimpan. Buka Pesanan Manual untuk mengecek pembayaran; jangan membayar ulang.');}
+    catch{const p=payments.get(r.order.invoice_id,user);diagnostics?.record('payment',p?.status==='failure'?'REJECTED':'UNCERTAIN',r.order.invoice_id);if(p&&!p.credited&&['expire','deny','cancel','failure'].includes(p.status)){releaseUnpaid(user,token);throw Error('Pembuatan tagihan ditolak. Stok sudah dikembalikan; periksa konfigurasi pembayaran sebelum mencoba lagi.');}throw Error('Status pembuatan tagihan belum pasti. Buka Riwayat Pesanan / Invoice untuk pemeriksaan; jangan membayar ulang.');}
   }
   const releaseUnpaid=db.transaction((user,id)=>{const o=getOrder(user,id),p=payments.get(o.invoice_id,user);
     if(o.state==='awaiting_payment'&&!p?.credited&&['expire','deny','cancel','failure'].includes(p?.status)){restoreQuantity(o);db.prepare("UPDATE manual_product_stock SET state='available',order_id=NULL WHERE order_id=? AND state='reserved'").run(o.id);db.prepare("UPDATE manual_product_orders SET state='expired',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);}return getOrder(user,id);
   });
   async function refresh(user,id){let o=getOrder(user,id);if(o.payment_method==='qris'&&o.state==='awaiting_payment'){await payments.refresh(o.invoice_id,user);const p=payments.get(o.invoice_id,user);o=p?.credited?await fulfillPayment(p):releaseUnpaid(user,id);}await notify(o);return o;}
-  async function poll(){if(polling)return;polling=true;try{for(const o of db.prepare("SELECT * FROM manual_product_orders WHERE state='awaiting_payment' ORDER BY COALESCE(polled_at,0),created_at LIMIT 5").all()){db.prepare('UPDATE manual_product_orders SET polled_at=? WHERE id=?').run(Date.now(),o.id);try{await refresh(o.discord_id,o.id);}catch{}}
+  async function poll(){if(polling)return;polling=true;try{for(const o of db.prepare("SELECT * FROM manual_product_orders WHERE state='awaiting_payment' ORDER BY COALESCE(polled_at,0),created_at LIMIT 5").all()){db.prepare('UPDATE manual_product_orders SET polled_at=? WHERE id=?').run(Date.now(),o.id);try{await refresh(o.discord_id,o.id);}catch{diagnostics?.record('product_poll','FAILED',o.id);}}
     for(const o of db.prepare("SELECT * FROM manual_product_orders WHERE notified=0 AND state IN ('completed','refunded') LIMIT 10").all())await notify(o);
   }finally{polling=false;}}
   function getOrder(user,id,asAdmin=false){if(asAdmin)admin(user);const o=db.prepare('SELECT * FROM manual_product_orders WHERE id=?').get(id);if(!o || (!asAdmin && o.discord_id!==user))throw Error('Pesanan tidak ditemukan.');return o;}

@@ -40,7 +40,12 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     const base=live?'https://tripay.co.id/api':'https://tripay.co.id/api-sandbox';
     const response=await fetchImpl(base+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Accept:'application/json',Authorization:'Bearer '+apiKey},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(15000)});
     const result=await response.json();
-    if(!response.ok || result.success!==true || !result.data)throw new Error('TriPay belum dapat memproses permintaan. Periksa channel/konfigurasi atau cek tagihan sebelum mencoba lagi.');
+    if(!response.ok || result.success!==true || !result.data){
+      const e=new Error('TriPay belum dapat memproses permintaan. Periksa channel/konfigurasi atau cek tagihan sebelum mencoba lagi.');
+      // Only an explicit validation/auth rejection proves that no invoice was created.
+      e.creationRejected=path==='/transaction/create'&&result.success===false&&[400,401,403,422].includes(response.status);
+      throw e;
+    }
     return result.data;
   }
   const normalize=s=>({UNPAID:'pending',PAID:'settlement',EXPIRED:'expire',FAILED:'failure',REFUND:'refund'})[s];
@@ -80,9 +85,10 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     amount=parseTopup(amount,purpose==='purchase'?1000:5000);const email=parseCustomerEmail(options.email);
     const orderId=options.orderId || 'maboyy-'+randomUUID();
     reserve(orderId,userId,amount,purpose);
-    const status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli Hi, Belanja Produk Digital Yukk').slice(0,100),customer_email:email,
+    let status;try{status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli Hi, Belanja Produk Digital Yukk').slice(0,100),customer_email:email,
       order_items:[{name:purpose==='purchase'?'Pembelian Hi, Belanja Produk Digital Yukk':'Isi Saldo Hi, Belanja Produk Digital Yukk',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
       signature:createHmac('sha256',privateKey).update(merchantCode+orderId+amount).digest('hex')});
+    }catch(e){if(e.creationRejected)db.prepare("UPDATE topups SET status='failure' WHERE order_id=? AND status='creating' AND provider_ref IS NULL AND credited=0").run(orderId);throw e;}
     // Reuse the same strict checks for the charge response and subsequent detail responses.
     validateStatus(db.prepare('SELECT * FROM topups WHERE order_id=?').get(orderId),status);
     const p=apply(status);if(p.credited && p.purpose==='purchase')await onSettled(p);

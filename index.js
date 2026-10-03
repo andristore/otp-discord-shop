@@ -35,12 +35,15 @@ const {createShopTools,createShopToolsHandler}=require("./shop-tools");
 const {createEfficiency,createEfficiencyHandler}=require("./efficiency");
 const {createStoreFeatures,createStoreFeatureHandler,REFUND_GUIDE}=require("./store-features");
 const app = express();
+app.set("trust proxy",1);
+const webSecurity=require("./web-security").createWebSecurity();
 const databasePath = process.env.DB_PATH || (process.env.RAILWAY_VOLUME_MOUNT_PATH
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "shop.db")
   : "shop.db");
 fs.mkdirSync(path.dirname(path.resolve(databasePath)), {recursive: true});
 const db = new Database(databasePath);
 db.pragma("journal_mode = WAL");
+const diagnostics=require("./web-security").createDiagnostics({db});
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS products (
@@ -88,14 +91,15 @@ const directPoll=setInterval(()=>direct.poll().catch(console.error),30000);
 directPoll.unref();
 app.use(express.urlencoded({extended:true}));
 app.use(session({
-  secret: process.env.SESSION_SECRET || "replace-me",
+  secret: webSecurity.sessionSecret,
   resave: false, saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: "lax", secure: false }
+  cookie: { httpOnly: true, sameSite: "lax", secure: webSecurity.secure, maxAge: 3600000 }
 }));
+app.use("/api/admin",webSecurity.originGuard);
 app.use(express.static("public"));
 
 function admin(req,res,next){
-  if(req.session.admin) return next();
+  if(webSecurity.enabled&&req.session.admin) return next();
   res.status(401).json({error:"Unauthorized"});
 }
 
@@ -199,9 +203,9 @@ app.get("/api/products",async(req,res)=>{
   }
 });
 
-app.post("/api/admin/login",(req,res)=>{
+app.post("/api/admin/login",webSecurity.loginLimit,(req,res)=>{
   if(req.body.password && req.body.password === process.env.ADMIN_PASSWORD){
-    req.session.admin = true; return res.json({ok:true});
+    return req.session.regenerate(error=>{if(error)return res.status(500).json({error:"Session login gagal dibuat."});req.session.admin=true;res.json({ok:true});});
   }
   res.status(401).json({error:"Password salah"});
 });
@@ -276,12 +280,12 @@ const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Di
 const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
 const languages=createLanguages({db,staff});
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM});
-manualProducts=createManualProducts({db,staff,payments,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
+manualProducts=createManualProducts({diagnostics,db,staff,payments,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
   sendDM:(id,body,meta)=>meta?improvements.send(meta.kind,meta.ref,id,()=>sendDiscordDM(id,body)):sendDiscordDM(id,body),language:id=>languages.get(id),staff});
-const smsWebhook=createSMSCodeWebhook({db,operations});smsWebhook.mount(app);
+const smsWebhook=createSMSCodeWebhook({diagnostics,db,operations});smsWebhook.mount(app);
 const smsWebhookPoll=setInterval(()=>smsWebhook.drain().catch(console.error),15000);smsWebhookPoll.unref();
 smsWebhook.drain().catch(console.error);
 client.on('guildCreate',guild=>serverAccess.register(guild).catch(console.error));
@@ -338,7 +342,7 @@ async function startDiscord(){
 
   const efficiency=createEfficiency({db,staff});
   const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
-  const shopHealth=createShopHealth({db,staff,payments,products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
+  const shopHealth=createShopHealth({diagnostics,db,staff,payments,products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
   const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
   const buyerManagement=createBuyerManagement({db,staff});
   const handleBuyerManagement=createBuyerManagementHandler({discord:require("discord.js"),model:buyerManagement,staff});
@@ -534,7 +538,8 @@ async function startDiscord(){
         });
       }
     } catch(e){
-      console.error(e);
+      diagnostics.record("interaction","FAILED",i.id);
+      console.error("Interaksi Discord gagal; referensi",i.id,"kode",Number.isInteger(e.code)?e.code:"tidak diketahui");
       try{
         if(i.deferred) await i.editReply("❌ Terjadi kesalahan.");
         else if(!i.replied) await i.reply({ephemeral:true,content:"❌ Terjadi kesalahan."});

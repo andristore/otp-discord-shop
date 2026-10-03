@@ -1,4 +1,4 @@
-function createShopHealth({db,staff,payments,products,sendDM,inspectChannel,env=process.env,now=Date.now}){
+function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspectChannel,env=process.env,now=Date.now}){
   db.exec(`CREATE TABLE IF NOT EXISTS shop_health_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS overdue_notifications(kind TEXT NOT NULL,ref TEXT NOT NULL,admin_id TEXT NOT NULL,sent_at INTEGER NOT NULL,PRIMARY KEY(kind,ref,admin_id));`);
   const admin=id=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');};
@@ -23,7 +23,7 @@ function createShopHealth({db,staff,payments,products,sendDM,inspectChannel,env=
       }
     }}finally{notifying=false;}
   }
-  const findingsQuery=`SELECT 'wallet' kind,discord_id ref,'Saldo negatif' reason FROM users WHERE balance<0
+  let findingsQuery=`SELECT 'wallet' kind,discord_id ref,'Saldo negatif' reason FROM users WHERE balance<0
     UNION ALL SELECT 'digital',o.id,'Pesanan QRIS tidak cocok dengan pembayaran tercatat' FROM manual_product_orders o
       LEFT JOIN topups p ON p.order_id=o.invoice_id WHERE o.payment_method='qris' AND o.state IN ('pending','completed','refunded')
       AND (p.order_id IS NULL OR p.credited<>1 OR p.discord_id<>o.discord_id OR p.amount<>o.amount OR p.purpose<>'purchase')
@@ -34,6 +34,8 @@ function createShopHealth({db,staff,payments,products,sendDM,inspectChannel,env=
     UNION ALL SELECT 'invoice',p.order_id,'Status lunas tetapi belum ditandai terverifikasi' FROM topups p WHERE p.status='settlement' AND p.credited=0
     UNION ALL SELECT 'otp',d.invoice_id,'Pesanan OTP tidak cocok dengan pembayaran tercatat' FROM direct_purchases d LEFT JOIN topups p ON p.order_id=d.invoice_id WHERE d.state IN ('processing','review','fulfilled','refunded') AND (p.order_id IS NULL OR p.credited<>1 OR p.discord_id<>d.discord_id OR p.amount<>d.amount OR p.purpose<>'purchase')
     UNION ALL SELECT 'stock',CAST(s.id AS TEXT),'Data terjual tidak terhubung ke pesanan selesai' FROM manual_product_stock s WHERE s.state='sold' AND NOT EXISTS(SELECT 1 FROM manual_product_orders o WHERE o.id=s.order_id AND o.state='completed')`;
+  const topupColumns=db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name);
+  if(topupColumns.includes('provider_ref')&&topupColumns.includes('gateway'))findingsQuery+=" UNION ALL SELECT 'invoice',order_id,'Pembuatan invoice belum pasti; referensi gateway belum diterima' FROM topups WHERE gateway='tripay' AND status='creating' AND provider_ref IS NULL AND credited=0";
   function reconcile(user,p=0){admin(user);return page(findingsQuery,[],p);}
   async function readiness(user,guildId,channelId){admin(user);const dbOK=!!db.prepare('SELECT 1 ok').get().ok;
     let channel='Buka dari channel toko pada server tujuan.';if(guildId)try{channel=await inspectChannel(guildId,channelId);}catch{channel='Channel belum dapat diperiksa. Periksa izin bot.';}
@@ -43,7 +45,16 @@ function createShopHealth({db,staff,payments,products,sendDM,inspectChannel,env=
     return {dbOK,backup,gateway:payments.configured?(payments.production?'Produksi — konfigurasi tersedia':'Sandbox / mode uji'):'Belum dikonfigurasi',provider:!!env.SMSCODE_API_TOKEN,webhook:!!(env.SMSCODE_WEBHOOK_URL&&env.SMSCODE_WEBHOOK_SECRET),channel,automatic:Number(automatic.total),unready:Number(automatic.unready||0),issues};
   }
   async function testDM(user){admin(user);await sendDM(user,'✅ Tes DM admin berhasil. Tidak ada pembelian, pemotongan saldo, atau perubahan stok.');}
-  return {settings,configure,toggle,overdue,poll,reconcile,readiness,testDM};
+  async function recoverInvoice(user,invoice,reference){admin(user);invoice=String(invoice||'').trim();reference=String(reference||'').trim();if(!/^[a-zA-Z0-9_-]{1,100}$/.test(invoice)||! /^[a-zA-Z0-9_-]{1,100}$/.test(reference))throw Error('Isi ID invoice dan referensi TriPay yang valid dari dashboard merchant.');
+    const p=db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='tripay'").get(invoice);if(!p)throw Error('Invoice TriPay tidak ditemukan.');
+    const updated=await payments.refresh(invoice,p.discord_id,reference);
+    if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_product_orders'").get()){
+      const order=db.prepare('SELECT id FROM manual_product_orders WHERE invoice_id=? AND discord_id=?').get(invoice,p.discord_id);if(order&&products?.refresh)await products.refresh(p.discord_id,order.id);
+    }
+    if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shop_admin_audit'").get())db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(user,'Verifikasi referensi TriPay untuk invoice '+invoice);
+    return updated;
+  }
+  return {recoverInvoice,errors:user=>{admin(user);return diagnostics?.recent()||[];},settings,configure,toggle,overdue,poll,reconcile,readiness,testDM};
 }
 const label=k=>({paid_pending:'Pembayaran lunas, pesanan belum diproses',digital_pending:'Produk dibayar, menunggu admin',digital_dm:'Hasil produk / refund belum terkirim ke DM',otp_review:'Pembayaran OTP perlu diperiksa'}[k]||k);
 function createHealthHandler({discord,model,staff}){
@@ -53,17 +64,20 @@ function createHealthHandler({discord,model,staff}){
     if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     const user=i.user.id,home=b('admin_home','Menu Awal Admin');
     if(id==='admin_healthcheck_limit'){const s=model.settings(user);await i.showModal(new ModalBuilder().setCustomId('admin_healthcheck_limit_save').setTitle('Batas Pesanan Terlambat').addComponents(row(new TextInputBuilder().setCustomId('minutes').setLabel('Menit (5–1440)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(4).setValue(String(s.minutes)))));return true;}
+    if(id==='admin_healthcheck_invoice'){const m=new ModalBuilder().setCustomId('admin_healthcheck_invoice_save').setTitle('Pulihkan Referensi TriPay');for(const [key,label]of [['invoice','ID invoice bot'],['reference','Referensi dari dashboard TriPay']])m.addComponents(row(new TextInputBuilder().setCustomId(key).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)));await i.showModal(m);return true;}
     await i.deferReply({ephemeral:true});
     try {
-      if(id.startsWith('admin_healthcheck_overdue:')||id==='admin_healthcheck_limit_save'||id==='admin_healthcheck_toggle'){
+      if(id==='admin_healthcheck_invoice_save'){const p=await model.recoverInvoice(user,i.fields.getTextInputValue('invoice'),i.fields.getTextInputValue('reference'));await i.editReply({content:'Referensi diperiksa langsung melalui API TriPay. Status: '+p.status+'. Tidak membuat tagihan baru.',components:[row(b('admin_healthcheck_reconcile:0','Kembali'),home)]});
+      }else if(id==='admin_healthcheck_errors'){const rows=model.errors(user);await i.editReply({content:'**Catatan Gangguan Bot**\nMenyimpan 100 kelompok gangguan, menampilkan 10 terbaru. Token, secret dan isi akun tidak disimpan.\n\n'+(rows.map(r=>`${r.scope} • ${r.code} • ${r.count} kali\nReferensi: ${r.ref||'-'} • <t:${Math.floor(r.seen_at/1000)}:R>`).join('\n\n')||'Belum ada gangguan tercatat.'),allowedMentions:{parse:[]},components:[row(b('admin_healthcheck_errors','Perbarui'),b('admin_healthcheck','Kembali'),home)]});
+      }else if(id.startsWith('admin_healthcheck_overdue:')||id==='admin_healthcheck_limit_save'||id==='admin_healthcheck_toggle'){
         if(id==='admin_healthcheck_limit_save')model.configure(user,i.fields.getTextInputValue('minutes'));if(id==='admin_healthcheck_toggle')model.toggle(user);
         const r=model.overdue(user,id.includes(':')?Number(id.split(':')[1]):0);
         await i.editReply({content:`**Pesanan Terlambat**\nPeringatan admin: ${r.enabled?'Aktif':'Nonaktif'} • batas ${r.minutes} menit\nHalaman ${r.page+1}/${r.pages} • ${r.count} pesanan\n\n`+r.rows.map(o=>`${label(o.kind)}\nID: ${o.ref}\nPembeli: ${o.discord_id}`).join('\n\n'),allowedMentions:{parse:[]},components:[row(b('admin_healthcheck_overdue:'+(r.page-1),'Sebelumnya').setDisabled(!r.page),b('admin_healthcheck_overdue:'+(r.page+1),'Berikutnya').setDisabled(r.page===r.pages-1),b('admin_healthcheck_overdue:'+r.page,'Perbarui')),row(b('admin_healthcheck_limit','Atur Batas'),b('admin_healthcheck_toggle',r.enabled?'Matikan Peringatan':'Aktifkan Peringatan'),b('admin_payment_requests','Proses Pesanan')),row(b('admin_payment_checks','Kembali'),home)]});
       }else if(id.startsWith('admin_healthcheck_reconcile:')){
-        const r=model.reconcile(user,Number(id.split(':')[1]));await i.editReply({content:`**Pencocokan Catatan Transaksi**\nHalaman ${r.page+1}/${r.pages} • ${r.count} temuan\nPemeriksaan lokal; tidak mengubah saldo, status gateway, refund, atau stok.\n\n`+(r.count?r.rows.map(o=>`${o.reason}\nID: ${o.ref}`).join('\n\n'):'Tidak ada ketidakcocokan pada aturan yang diperiksa. Ini bukan rekonstruksi seluruh mutasi saldo atau konfirmasi langsung gateway.'),allowedMentions:{parse:[]},components:[row(b('admin_healthcheck_reconcile:'+(r.page-1),'Sebelumnya').setDisabled(!r.page),b('admin_healthcheck_reconcile:'+(r.page+1),'Berikutnya').setDisabled(r.page===r.pages-1),b('admin_healthcheck_reconcile:'+r.page,'Perbarui')),row(b('admin_payment_issues','Periksa Pesanan'),b('admin_payment_checks','Kembali'),home)]});
+        const r=model.reconcile(user,Number(id.split(':')[1]));await i.editReply({content:`**Pencocokan Catatan Transaksi**\nHalaman ${r.page+1}/${r.pages} • ${r.count} temuan\nPemeriksaan lokal; tidak mengubah saldo, status gateway, refund, atau stok.\n\n`+(r.count?r.rows.map(o=>`${o.reason}\nID: ${o.ref}`).join('\n\n'):'Tidak ada ketidakcocokan pada aturan yang diperiksa. Ini bukan rekonstruksi seluruh mutasi saldo atau konfirmasi langsung gateway.'),allowedMentions:{parse:[]},components:[row(b('admin_healthcheck_reconcile:'+(r.page-1),'Sebelumnya').setDisabled(!r.page),b('admin_healthcheck_reconcile:'+(r.page+1),'Berikutnya').setDisabled(r.page===r.pages-1),b('admin_healthcheck_reconcile:'+r.page,'Perbarui')),row(b('admin_healthcheck_invoice','Pulihkan Referensi TriPay')),row(b('admin_payment_issues','Periksa Pesanan'),b('admin_payment_checks','Kembali'),home)]});
       }else{
         let prefix='';if(id==='admin_healthcheck_dm'){await model.testDM(user);prefix='✅ Tes DM terkirim ke Anda.\n\n';}
-        const r=await model.readiness(user,i.guildId,i.channelId);await i.editReply({content:prefix+`**Kesiapan Toko**\nBackup: ${r.backup}\nDatabase: ${r.dbOK?'OK':'Perlu diperiksa'}\nQRIS: ${r.gateway}\nAPI SMSCode: ${r.provider?'Konfigurasi tersedia':'Belum diisi'}\nWebhook SMSCode: ${r.webhook?'Konfigurasi tersedia':'Belum lengkap'}\nChannel: ${r.channel}\nProduk otomatis aktif: ${r.automatic} • stok/data belum siap: ${r.unready}\nKetidakcocokan transaksi: ${r.issues}\n\nKonfigurasi tersedia belum membuktikan koneksi/API/webhook berhasil. Gunakan tes webhook yang sudah ada dan lakukan transaksi uji sesuai mode gateway. Tes DM admin tidak menjamin DM semua pembeli terbuka.`,components:[row(b('admin_healthcheck','Perbarui'),b('admin_healthcheck_dm','Tes DM Admin',3),b('admin_smscode_webhook_test','Tes Webhook SMSCode')),row(b('admin_system_data','Kembali'),home)]});
+        const r=await model.readiness(user,i.guildId,i.channelId);await i.editReply({content:prefix+`**Kesiapan Toko**\nBackup: ${r.backup}\nDatabase: ${r.dbOK?'OK':'Perlu diperiksa'}\nQRIS: ${r.gateway}\nAPI SMSCode: ${r.provider?'Konfigurasi tersedia':'Belum diisi'}\nWebhook SMSCode: ${r.webhook?'Konfigurasi tersedia':'Belum lengkap'}\nChannel: ${r.channel}\nProduk otomatis aktif: ${r.automatic} • stok/data belum siap: ${r.unready}\nKetidakcocokan transaksi: ${r.issues}\n\nKonfigurasi tersedia belum membuktikan koneksi/API/webhook berhasil. Gunakan tes webhook yang sudah ada dan lakukan transaksi uji sesuai mode gateway. Tes DM admin tidak menjamin DM semua pembeli terbuka.`,components:[row(b('admin_healthcheck','Perbarui'),b('admin_healthcheck_dm','Tes DM Admin',3),b('admin_smscode_webhook_test','Tes Webhook SMSCode')),row(b('admin_healthcheck_errors','Catatan Gangguan'),b('admin_system_data','Kembali'),home)]});
       }
     }catch(e){await i.editReply({content:id==='admin_healthcheck_dm'?'Tes DM gagal. Aktifkan DM dari anggota server, lalu coba lagi.':String(e.message||'Pemeriksaan gagal.').slice(0,1700),components:[row(b(id.includes('overdue')||id.includes('reconcile')||id.includes('limit')||id.includes('toggle')?'admin_payment_checks':'admin_system_data','Kembali'),home)],allowedMentions:{parse:[]}});}
     return true;
