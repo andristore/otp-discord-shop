@@ -281,7 +281,7 @@ storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM,resolveInfoChan
 manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 const digiflazz=createDigiflazz({db,pricing,assertOpen:assertStoreOpen,staff,sendDM:sendDiscordDM,audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 digiflazz.mount(app);
-const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
+const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff,isMember:async(guildId,userId)=>{const guild=client.guilds.cache.get(guildId);if(!guild)return false;const member=await guild.members.fetch({user:userId,force:true});return !!member;}});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
   sendDM:(id,body,meta)=>meta?improvements.send(meta.kind,meta.ref,id,()=>sendDiscordDM(id,body)):sendDiscordDM(id,body),language:id=>languages.get(id),staff});

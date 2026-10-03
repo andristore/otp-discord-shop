@@ -1,4 +1,4 @@
-function createServerAccess({db,sendDM,env=process.env,staff}) {
+function createServerAccess({db,sendDM,env=process.env,staff,isMember=async()=>false}) {
   const isAdmin=id=>staff?staff.isAdmin(id):require('./admin').isDiscordAdmin(id,env.ADMIN_DISCORD_IDS || '');
   db.exec(`CREATE TABLE IF NOT EXISTS discord_server_access (
     guild_id TEXT PRIMARY KEY,name TEXT NOT NULL,owner_id TEXT,members INTEGER NOT NULL DEFAULT 0,
@@ -55,10 +55,33 @@ function createServerAccess({db,sendDM,env=process.env,staff}) {
     const count=db.prepare('SELECT COUNT(*) n FROM discord_server_access').get().n,pages=Math.max(1,Math.ceil(count/5));page=Math.min(Math.max(Number.isSafeInteger(page)?page:0,0),pages-1);
     return {page,pages,count,rows:db.prepare("SELECT * FROM discord_server_access ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,created_at DESC,guild_id ASC LIMIT 5 OFFSET ?").all(page*5)};
   }
+  async function dmLinks(userId) {
+    const ownerIds=staff?.ownerList?staff.ownerList().map(p=>p.id):String(env.OWNER_DISCORD_IDS||env.ADMIN_DISCORD_IDS||'').split(',').map(id=>id.trim());
+    const ownerId=ownerIds.find(id=>/^\d{17,20}$/.test(String(id)));
+    const buttons=[];
+    if(ownerId)buttons.push({type:2,style:5,label:'Hubungi Owner',url:'https://discord.com/users/'+ownerId});
+    let serverURL;
+    try {
+      const url=new URL(String(env.SHOP_SERVER_INVITE_URL||'').trim());
+      if(url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&!url.search&&!url.hash&&((url.hostname==='discord.gg'&&/^\/[A-Za-z0-9-]+\/?$/.test(url.pathname))||(url.hostname==='discord.com'&&/^\/invite\/[A-Za-z0-9-]+\/?$/.test(url.pathname))))serverURL=url.href;
+    }catch{}
+    const servers=db.prepare("SELECT guild_id,channel_id,name FROM discord_server_access WHERE status='approved' AND present=1 ORDER BY created_at,guild_id").all();
+    const joined=[];
+    for(let offset=0;offset<servers.length&&joined.length<24;offset+=5){
+      const batch=servers.slice(offset,offset+5);
+      const matches=await Promise.all(batch.map(async server=>{if(!/^\d{17,20}$/.test(server.guild_id))return false;try{return await isMember(server.guild_id,String(userId))===true;}catch{return false;}}));
+      for(let j=0;j<batch.length&&joined.length<24;j++)if(matches[j])joined.push(batch[j]);
+    }
+    for(const server of joined)buttons.push({type:2,style:5,label:joined.length===1?'Buka Server':('Buka '+server.name).slice(0,80),url:'https://discord.com/channels/'+server.guild_id+'/'+(/^\d{17,20}$/.test(server.channel_id||'')?server.channel_id:'@home')});
+    if(!joined.length&&serverURL)buttons.push({type:2,style:5,label:'Server Owner',url:serverURL});
+    return Array.from({length:Math.ceil(buttons.length/5)},(_,r)=>({type:1,components:buttons.slice(r*5,r*5+5)}));
+  }
   async function gate(i) {
     if(!i.guildId){
       if(isAdmin(i.user.id))return false;
-      await i.reply({ephemeral:true,content:'🔒 Menu bot melalui DM hanya untuk admin toko. Untuk belanja, cek saldo, isi saldo, atau melihat pesanan, buka /shop di server Discord yang sudah disetujui. Data pesanan tetap dikirim ke DM Anda.'});
+      const deferred=typeof i.deferReply==='function';if(deferred)await i.deferReply({ephemeral:true});
+      const components=await dmLinks(i.user.id);
+      await (deferred?i.editReply.bind(i):i.reply.bind(i))({ephemeral:true,content:'🔒 Menu bot melalui DM hanya untuk admin toko. Untuk belanja, cek saldo, isi saldo, atau melihat pesanan, buka /shop di server Discord yang sudah disetujui. Data pesanan tetap dikirim ke DM Anda.',allowedMentions:{parse:[]},components});
       return true;
     }
     if(isAdmin(i.user.id))return false;
