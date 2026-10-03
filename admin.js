@@ -59,7 +59,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(id==='admin_catalog_provider')return menu('📱 OTP Provider','Periksa katalog SMSCode atau atur markup harga jual OTP.',[
       ['provider_catalog','Lihat Layanan',ButtonStyle.Secondary],['admin_pricing','Atur Harga OTP']], 'admin_catalog_menu');
     if(id==='admin_catalog_manual')return menu('📦 Produk Lainnya','Pilih Kelola Produk untuk menambah produk, mengubah data, stok, harga jual, status, atau menghapus produk.',[
-      ['admin_manual_catalog:0','Kelola Produk']], 'admin_catalog_menu');
+      ['admin_manual_catalog:0','Kelola Produk'],['admin_premium_claims:0','Klaim Garansi']], 'admin_catalog_menu');
     if(id==='admin_catalog_promo')return menu('🎟️ Promo','Buat voucher dan atur status promo toko.',[
       ['admin_tools_coupons:0','Kelola Voucher']], 'admin_catalog_menu');
     if(id==='admin_balance_menu')return menu('👥 Pembeli','Akun, saldo, dan bantuan pembeli.',[

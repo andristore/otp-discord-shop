@@ -38,7 +38,7 @@ function createOrderHistory({db}){
  return {list,detail};
 }
 
-function createOrderHistoryHandler({discord,model,payments}){
+function createOrderHistoryHandler({discord,model,payments,premium}){
  const {ActionRowBuilder,ButtonBuilder}=discord;
  const button=(id,label,style=1)=>new ButtonBuilder().setCustomId(id).setLabel(String(label).slice(0,80)).setStyle(style);
  const row=(...items)=>new ActionRowBuilder().addComponents(...items);
@@ -68,6 +68,7 @@ function createOrderHistoryHandler({discord,model,payments}){
     if(o.kind==='digital'){
      if(o.state==='completed'&&o.delivery)content+=`\n\n**Data Produk**\n${safe(o.delivery)}`;
      actions.push(button('manual_repeat:'+o.id,'Beli Lagi'));
+     if(premium&&o.state==='completed'){if(o.expires_ms)content+='\nMasa aktif berakhir: <t:'+Math.floor(o.expires_ms/1000)+':F>';if(o.warranty_ms){content+='\nGaransi sampai: <t:'+Math.floor(o.warranty_ms/1000)+':F>';actions.push(button('premium_claim:'+o.id,'Klaim Garansi'));}}
     }else if(o.provider_order_id){
      content+=`\nOrder OTP: ${safe(o.provider_order_id)}\nNomor: ${safe(o.phone||'-')}\nOTP: ${safe(o.otp||'Belum diterima')}`;
      actions.push(button('check_otp:'+o.provider_order_id,'Cek OTP',3));
@@ -75,9 +76,10 @@ function createOrderHistoryHandler({discord,model,payments}){
     }
     if(actions.length)components.push(row(...actions));
     components.push(row(button('history_list:all:orders:0','Kembali'),button('shop_home','Menu Awal')));
+    const guide=premium&&o.kind==='digital'&&o.state==='completed'&&o.guide_snapshot?[{title:'Panduan Penggunaan',description:safe(o.guide_snapshot)}]:[];
     // Long delivery data stays in a private embed, avoiding Discord's content limit.
-    if(content.length>1900){const {EmbedBuilder}=discord;await i.editReply({content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('Detail Pesanan').setDescription(content)],allowedMentions:{parse:[]},components});}
-    else await i.editReply({content,embeds:[],allowedMentions:{parse:[]},components});
+    if(content.length>1900){const {EmbedBuilder}=discord;await i.editReply({content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('Detail Pesanan').setDescription(content),...guide],allowedMentions:{parse:[]},components});}
+    else await i.editReply({content,embeds:guide,allowedMentions:{parse:[]},components});
    }
   }catch(e){await i.editReply({content:e.message,embeds:[],allowedMentions:{parse:[]},components:[row(button('history_list:all:orders:0','Kembali'),button('shop_home','Menu Awal'))]});}
   return true;

@@ -12,6 +12,7 @@ const {
 } = require("discord.js");
 
 const {createBuyerProfiles,configureBuyerProfiles,rememberBuyer}=require("./buyer-profiles");
+const {createPremiumProducts,createPremiumProductsHandler}=require("./premium-products");
 const {createManualProducts,createManualProductsHandler}=require("./manual-products");
 const {createBuyerManagement,createBuyerManagementHandler}=require("./buyer-management");
 const {createOrderHistory,createOrderHistoryHandler}=require("./order-history");
@@ -327,8 +328,10 @@ async function startDiscord(){
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
   const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024};},audit:toolkit.audit});
-  const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
-  const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments});
+  const premiumProducts=createPremiumProducts({db,staff,products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
+  const handlePremiumProducts=createPremiumProductsHandler({discord:require("discord.js"),model:premiumProducts,products:manualProducts,staff});
+  const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
+  const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments,premium:premiumProducts});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true,isOwner:id=>staff.isOwner(id)});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
@@ -354,6 +357,7 @@ async function startDiscord(){
         return i.reply({ephemeral:true,content:'🔧 Toko sedang maintenance. Pembelian baru dihentikan sementara. Pesanan, OTP, dan tagihan sebelumnya tetap tersedia.'});
       }
       if(await handleTools(i))return;
+      if(await handlePremiumProducts(i))return;
       if(await handleOrderHistory(i))return;
       if(await handleEfficiency(i))return;
       if(await handleStaff(i))return;
@@ -520,6 +524,7 @@ async function startDiscord(){
   const stockPoll=setInterval(()=>toolkit.stock().catch(console.error),60000);stockPoll.unref();toolkit.stock().catch(console.error);
   const backupPoll=setInterval(()=>toolkit.backup().catch(console.error),3600000);backupPoll.unref();toolkit.backup().catch(console.error);
   const manualPoll=setInterval(()=>storeFeatures.poll().catch(console.error),30000);manualPoll.unref();storeFeatures.poll().catch(console.error);
+  const premiumPoll=setInterval(()=>premiumProducts.poll().catch(console.error),60000);premiumPoll.unref();premiumProducts.poll().catch(console.error);
   const manualProductPoll=setInterval(()=>manualProducts.poll().catch(console.error),30000);manualProductPoll.unref();manualProducts.poll().catch(console.error);
 }
 startDiscord();
