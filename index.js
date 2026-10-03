@@ -18,7 +18,7 @@ const {createShopImprovements,createImprovementsHandler}=require("./shop-improve
 const {createPremiumProducts,createPremiumProductsHandler}=require("./premium-products");
 const {createManualProducts,createManualProductsHandler}=require("./manual-products");
 const {createBuyerManagement,createBuyerManagementHandler}=require("./buyer-management");
-const {createOrderHistory,createOrderHistoryHandler}=require("./order-history");
+const {createOrderHistory,createOrderHistoryHandler,createOrderChannel,createOrderChannelHandler}=require("./order-history");
 const {createAdminHandler,configureAdminAccess}=require("./admin");
 const {createPurchaseFlow}=require("./purchase-flow");
 const {createPayments,createPaymentHandler}=require("./payments");
@@ -274,7 +274,7 @@ const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Di
 const staff=createStaff({db});configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
 const languages=createLanguages({db,staff});
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM});
-manualProducts=createManualProducts({diagnostics,db,staff,payments,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
+manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
@@ -336,7 +336,7 @@ async function startDiscord(){
 
   const efficiency=createEfficiency({db,staff});
   const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,openBackup:file=>new Database(file,{readonly:true,fileMustExist:true}),backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
-  const shopHealth=createShopHealth({diagnostics,db,staff,payments,products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
+  const shopHealth=createShopHealth({diagnostics,db,staff,payments,language:id=>languages.get(id),products:manualProducts,sendDM:sendDiscordDM,inspectChannel:async(guildId,channelId)=>{const c=await client.channels.fetch(channelId),access=serverAccess.get(guildId);if(!access||access.status!=='approved')return 'Server belum disetujui.';if(access.channel_id&&access.channel_id!==channelId)return 'Buka pemeriksaan dari channel toko yang diizinkan.';if(!c||c.guildId!==guildId||c.type!==0)return 'Gunakan channel teks server.';const bits=require("discord.js").PermissionFlagsBits,p=c.permissionsFor(client.user);return p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks)?'Izin lihat/kirim/embed tersedia.':'Izin lihat/kirim/embed belum lengkap.';}});
   const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
   const buyerManagement=createBuyerManagement({db,staff});
   const handleBuyerManagement=createBuyerManagementHandler({discord:require("discord.js"),model:buyerManagement,staff});
@@ -352,6 +352,8 @@ async function startDiscord(){
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,language:id=>languages.get(id),sendDM:async(id,payload,order)=>{const send=async()=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload),id,'delivery'));};if(order)await improvements.send("digital",order.id,id,send);else await send();}});
   const handleImprovements=createImprovementsHandler({discord:require("discord.js"),model:improvements,products:manualProducts,operations,staff});
   const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments,premium:premiumProducts,language:id=>languages.get(id)});
+  const orderChannel=createOrderChannel({db,staff,resolveChannel:async id=>{const c=await client.channels.fetch(id);if(!c)return null;const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);return {id:c.id,guildId:c.guildId,type:c.type,canReport:!!p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages)&&p.has(bits.EmbedLinks),send:payload=>c.send(payload)};},send:(c,p)=>c.send(p)});
+  const handleOrderChannel=createOrderChannelHandler({discord:require('discord.js'),model:orderChannel,staff});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
   const handleProviderFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,adminView:true,isOwner:id=>staff.isOwner(id)});
   const handlePayment=createPaymentHandler({discord:require("discord.js"),payments,manualInstructions:()=>operations.settings().manual,adminIds:i=>staff.contactIds(i.guildId)});
@@ -376,6 +378,7 @@ async function startDiscord(){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
       if(await handleHealth(i))return;
+      if(await handleOrderChannel(i))return;
       if(await handleImprovements(i))return;
       if(await handleStoreFeatures(i))return;
       if(storeFeatures.maintenance() && /^(shop_products|flow_|pick_product:|buy_again:|confirm_buy:|qris_buy:|direct_email:|favorite_open:|tool_coupon)/.test(String(i.customId || ''))){
@@ -532,6 +535,7 @@ async function startDiscord(){
   });
 
   await client.login(process.env.DISCORD_TOKEN);
+  const orderChannelPoll=setInterval(()=>orderChannel.poll().catch(()=>console.error('Laporan channel pesanan gagal; periksa konfigurasi tujuan.')),30000);orderChannelPoll.unref();orderChannel.poll().catch(()=>console.error('Laporan channel pesanan gagal; periksa konfigurasi tujuan.'));
   const otpPoll=setInterval(()=>operations.pollOTP().catch(console.error),15000);otpPoll.unref();
   const lowPoll=setInterval(()=>operations.pollLow().catch(console.error),60000);lowPoll.unref();
   operations.pollOTP().catch(console.error);operations.pollLow().catch(console.error);

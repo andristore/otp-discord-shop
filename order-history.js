@@ -105,4 +105,54 @@ function createOrderHistoryHandler({discord,model,payments,premium,language=()=>
   return true;
  };
 }
-module.exports={createOrderHistory,createOrderHistoryHandler};
+// Durable, redacted order receipts. Delivery secrets never enter this queue.
+function createOrderChannel({db,staff,resolveChannel,send,now=Date.now}){
+ db.exec(`CREATE TABLE IF NOT EXISTS order_channel_settings(id INTEGER PRIMARY KEY CHECK(id=1),guild_id TEXT,channel_id TEXT,enabled INTEGER NOT NULL DEFAULT 0,initialized INTEGER NOT NULL DEFAULT 0);
+ INSERT OR IGNORE INTO order_channel_settings(id) VALUES(1);
+ CREATE TABLE IF NOT EXISTS order_channel_receipts(order_key TEXT PRIMARY KEY,state TEXT NOT NULL,attempt_ms INTEGER NOT NULL DEFAULT 0,message_id TEXT);
+ CREATE INDEX IF NOT EXISTS order_channel_pending ON order_channel_receipts(state,attempt_ms);`);
+ const config=()=>db.prepare('SELECT * FROM order_channel_settings WHERE id=1').get();
+ const owner=user=>{if(!staff.isOwner(user))throw Error('Pengaturan tujuan laporan hanya untuk owner.');};
+ const columns=db.prepare('PRAGMA table_info(orders)').all().map(c=>c.name);
+ const finished=`SELECT 'otp:'||o.id AS key,o.discord_id,COALESCE(NULLIF(o.product_name,''),p.name,'OTP') AS name,o.amount,o.created_at,
+ COALESCE((SELECT d.invoice_id FROM direct_purchases d WHERE d.discord_id=o.discord_id AND d.provider_order_id=o.provider_order_id LIMIT 1),'SALDO-OTP-'||o.id) AS invoice,
+ CASE WHEN EXISTS(SELECT 1 FROM direct_purchases d WHERE d.discord_id=o.discord_id AND d.provider_order_id=o.provider_order_id) THEN 'QRIS' ELSE 'Saldo' END AS method,'OTP' AS kind
+ FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE o.status IN ('OTP_RECEIVED','COMPLETED') ${columns.includes('refunded')?'AND o.refunded=0':''} ${columns.includes('is_owner_test')?'AND COALESCE(o.is_owner_test,0)=0':''}
+ UNION ALL SELECT 'digital:'||m.id,m.discord_id,m.product_name,m.amount,m.created_at,COALESCE(m.invoice_id,'SALDO-PRODUK-'||m.id),CASE WHEN m.payment_method='qris' THEN 'QRIS' ELSE 'Saldo' END,'Produk Digital'
+ FROM manual_product_orders m WHERE m.state='completed'`;
+ function discover(state='pending'){db.prepare('INSERT OR IGNORE INTO order_channel_receipts(order_key,state) SELECT key,? FROM ('+finished+')').run(state);}
+ async function channel(guildId,channelId){const c=await resolveChannel(channelId);if(!c||c.guildId!==guildId||c.type!==0||!c.canReport)throw Error('Gunakan channel teks server yang bisa dilihat bot, dengan izin Kirim Pesan dan Embed Links.');return c;}
+ const commit=db.transaction((guildId,channelId)=>{const old=config();if(!old.initialized)discover('skipped');db.prepare('UPDATE order_channel_settings SET guild_id=?,channel_id=?,enabled=1,initialized=1 WHERE id=1').run(guildId,channelId);});
+ async function configure(user,guildId,channelId){owner(user);guildId=String(guildId).trim();channelId=String(channelId).trim();if(!/^\d{17,20}$/.test(guildId)||!/^\d{17,20}$/.test(channelId))throw Error('Isi ID server dan channel yang valid.');await channel(guildId,channelId);owner(user);commit(guildId,channelId);return config();}
+ function disable(user){owner(user);db.prepare('UPDATE order_channel_settings SET enabled=0 WHERE id=1').run();}
+ const backfill=db.transaction(user=>{owner(user);if(!config().enabled)throw Error('Atur channel tujuan terlebih dahulu.');discover();db.prepare("UPDATE order_channel_receipts SET state='pending',attempt_ms=0 WHERE state='skipped'").run();return stats();});
+ function stats(){return {config:config(),pending:db.prepare("SELECT COUNT(*) n FROM order_channel_receipts WHERE state='pending'").get().n,sent:db.prepare("SELECT COUNT(*) n FROM order_channel_receipts WHERE state='sent'").get().n};}
+ function payload(o){let username;try{username=db.prepare('SELECT username FROM buyer_profiles WHERE discord_id=?').get(o.discord_id)?.username;}catch{}
+ return {embeds:[{color:0x00a65a,title:'🧾 Pesanan Selesai',description:`Pembeli: ${username?'@'+safe(username)+' • ':''}${safe(o.discord_id)}\nProduk: ${safe(String(o.name).slice(0,180))}\nJenis: ${o.kind}\nHarga: ${money(o.amount)}\nPembayaran: ${o.method}\nInvoice: ${safe(String(o.invoice).slice(0,150))}\nStatus: Selesai\nDipesan: ${safe(o.created_at)} UTC`,footer:{text:'est. 2020 — Bot Otomatis 24/7'}}],allowedMentions:{parse:[]}};}
+ let busy=false;
+ async function poll(){if(busy||!config().enabled)return;busy=true;try{discover();const rows=db.prepare("SELECT * FROM order_channel_receipts WHERE state='pending' AND attempt_ms<=? ORDER BY attempt_ms,order_key LIMIT 10").all(now()-60000);
+ for(const r of rows){const cfg=config();if(!cfg.enabled)break;db.prepare('UPDATE order_channel_receipts SET attempt_ms=? WHERE order_key=?').run(now(),r.order_key);
+ try{const c=await channel(cfg.guild_id,cfg.channel_id);const current=config();if(!current.enabled||current.channel_id!==cfg.channel_id||current.guild_id!==cfg.guild_id)break;const o=db.prepare('SELECT * FROM ('+finished+') WHERE key=?').get(r.order_key);if(!o){db.prepare("UPDATE order_channel_receipts SET state='skipped' WHERE order_key=?").run(r.order_key);continue;}
+ const m=await send(c,payload(o));db.prepare("UPDATE order_channel_receipts SET state='sent',message_id=? WHERE order_key=?").run(m?.id||null,r.order_key);
+ }catch{/* Persist pending receipt; retry after one minute without affecting payment or buyer DM. */}}
+ }finally{busy=false;}}
+ async function test(user){owner(user);const cfg=config();if(!cfg.enabled)throw Error('Atur channel tujuan terlebih dahulu.');const c=await channel(cfg.guild_id,cfg.channel_id);owner(user);await send(c,{content:'✅ Tes laporan pesanan berhasil. Pesanan selesai akan dilaporkan di channel ini.',allowedMentions:{parse:[]}});}
+ return {configure,disable,backfill,stats,poll,test};
+}
+function createOrderChannelHandler({discord,model,staff}){
+ const {ActionRowBuilder,ButtonBuilder,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
+ const button=(id,label,style=1)=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style),row=(...b)=>new ActionRowBuilder().addComponents(...b);
+ function view(){const s=model.stats(),c=s.config;return {content:`**Laporan Pesanan ke Channel**\nStatus: ${c.enabled?'Aktif':'Nonaktif'}\nServer: ${c.guild_id||'Belum diatur'}\nChannel: ${c.channel_id?'<#'+c.channel_id+'>':'Belum diatur'}\nTerkirim: ${s.sent} • Antrean: ${s.pending}\n\nMencakup OTP berhasil dan produk digital selesai. Data akun, password, dan OTP tidak ditampilkan. Riwayat lama hanya dikirim jika dipilih oleh owner.`,allowedMentions:{parse:[]},components:[row(button('admin_order_channel_config','Atur Channel'),button('admin_order_channel_test','Tes Channel'),button('admin_order_channel_backfill_confirm','Kirim Riwayat Lama')),row(button('admin_order_channel_disable','Nonaktifkan',4),button('admin_order_channel','Perbarui'),button('admin_reports_menu','Kembali'))]};}
+ return async i=>{const id=String(i.customId||'');if(!/^admin_order_channel(?::|_|$)/.test(id))return false;if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
+ try{if(id==='admin_order_channel'){await i.reply({ephemeral:true,...view()});return true;}if(!staff.isOwner(i.user.id))throw Error('Pengaturan tujuan laporan hanya untuk owner.');
+ if(id==='admin_order_channel_config'){await i.showModal(new ModalBuilder().setCustomId('admin_order_channel_save').setTitle('Channel Laporan Pesanan').addComponents(...[['guild','ID server tujuan'],['channel','ID channel tujuan']].map(([key,label])=>row(new TextInputBuilder().setCustomId(key).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20)))));return true;}
+ if(id==='admin_order_channel_backfill_confirm'){await i.reply({ephemeral:true,content:'Kirim semua riwayat pesanan selesai yang belum pernah dilaporkan ke channel tujuan? Pengguna yang dapat melihat channel tersebut akan dapat membaca ringkasan transaksi.',components:[row(button('admin_order_channel_backfill','Kirim Riwayat Lama',3),button('admin_order_channel','Batal'))]});return true;}
+ await i.deferReply({ephemeral:true});
+ if(id==='admin_order_channel_save')await model.configure(i.user.id,i.fields.getTextInputValue('guild'),i.fields.getTextInputValue('channel'));
+ else if(id==='admin_order_channel_disable')model.disable(i.user.id);
+ else if(id==='admin_order_channel_backfill')model.backfill(i.user.id);
+ else if(id==='admin_order_channel_test')await model.test(i.user.id);
+ else throw Error('Menu tidak dikenal.');await i.editReply(view());
+ }catch(e){const p={content:e.message,allowedMentions:{parse:[]},components:[row(button('admin_order_channel','Kembali'))]};if(i.deferred)await i.editReply(p);else await i.reply({ephemeral:true,...p});}return true;};
+}
+module.exports={createOrderHistory,createOrderHistoryHandler,createOrderChannel,createOrderChannelHandler};

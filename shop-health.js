@@ -1,5 +1,6 @@
-function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspectChannel,env=process.env,now=Date.now}){
+function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspectChannel,language=()=>'id',env=process.env,now=Date.now}){
   db.exec(`CREATE TABLE IF NOT EXISTS shop_health_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS invoice_reminders(order_id TEXT PRIMARY KEY,sent_ms INTEGER NOT NULL DEFAULT 0,checked_ms INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS overdue_notifications(kind TEXT NOT NULL,ref TEXT NOT NULL,admin_id TEXT NOT NULL,sent_at INTEGER NOT NULL,PRIMARY KEY(kind,ref,admin_id));`);
   const admin=id=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');};
   const read=(k,f)=>db.prepare('SELECT value FROM shop_health_settings WHERE key=?').get(k)?.value??f;
@@ -14,8 +15,19 @@ function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspect
   function overdueQuery(){return 'SELECT * FROM ('+lateQuery+") WHERE julianday(since)<=julianday(?,'unixepoch')-?/1440.0";}
   function page(query,args,requested=0){const count=db.prepare('SELECT COUNT(*) n FROM ('+query+')').get(...args).n,pages=Math.max(1,Math.ceil(count/5)),p=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1);return {count,pages,page:p,rows:db.prepare(query+' ORDER BY kind,ref LIMIT 5 OFFSET ?').all(...args,p*5)};}
   function overdue(user,p=0){const s=settings(user);return {...page(overdueQuery(),[now()/1000,s.minutes],p),...s};}
+  let reminding=false;
+  async function remindInvoices(){if(reminding||!sendDM||!db.prepare('PRAGMA table_info(topups)').all().some(c=>c.name==='expires_ms'))return;reminding=true;
+    try{const rows=db.prepare("SELECT p.* FROM topups p LEFT JOIN invoice_reminders r ON r.order_id=p.order_id WHERE p.credited=0 AND p.status='pending' AND p.qr_url IS NOT NULL AND p.expires_ms>? AND p.expires_ms<=? AND COALESCE(r.sent_ms,0)=0 AND COALESCE(r.checked_ms,0)<=? ORDER BY p.expires_ms LIMIT 5").all(now(),now()+5*60000,now()-60000);
+      for(const p of rows){db.prepare('INSERT INTO invoice_reminders(order_id,checked_ms) VALUES(?,?) ON CONFLICT(order_id) DO UPDATE SET checked_ms=excluded.checked_ms').run(p.order_id,now());
+        try{await payments.refresh(p.order_id,p.discord_id);const current=payments.get(p.order_id,p.discord_id);if(!current||current.credited||current.status!=='pending'||!current.qr_url||current.expires_ms<=now())continue;
+          await sendDM(p.discord_id,language(p.discord_id)==='en'?'⏰ QRIS invoice expires soon\nInvoice: '+p.order_id+'\nInvoice deadline: <t:'+Math.floor(current.expires_ms/1000)+':F>\nIf unpaid, use the QR on the same invoice. If already paid, check Orders → Invoice in the store server; do not pay again. This reminder does not create another invoice.':'⏰ Invoice QRIS segera kedaluwarsa\nInvoice: '+p.order_id+'\nBatas tagihan: <t:'+Math.floor(current.expires_ms/1000)+':F>\nJika belum dibayar, gunakan QR pada tagihan yang sama. Jika sudah dibayar, cek status melalui Pesanan → Invoice di server toko; jangan membayar ulang. Pengingat ini tidak membuat tagihan baru.');
+          db.prepare('UPDATE invoice_reminders SET sent_ms=? WHERE order_id=?').run(now(),p.order_id);
+        }catch{diagnostics?.record('payment','FAILED',p.order_id);}
+      }
+    }finally{reminding=false;}
+  }
   let notifying=false;
-  async function poll(){if(notifying||!sendDM||read('enabled','1')!=='1')return;notifying=true;
+  async function poll(){await remindInvoices();if(notifying||!sendDM||read('enabled','1')!=='1')return;notifying=true;
     try {for(const id of staff.ids().filter(x=>staff.isAdmin(x))){const query='SELECT q.* FROM ('+overdueQuery()+') q WHERE NOT EXISTS(SELECT 1 FROM overdue_notifications n WHERE n.kind=q.kind AND n.ref=q.ref AND n.admin_id=?) ORDER BY q.since LIMIT 5';
       for(const o of db.prepare(query).all(now()/1000,Number(read('minutes','15')),id)){
         if(!staff.isAdmin(id))break;
@@ -54,7 +66,7 @@ function createShopHealth({diagnostics,db,staff,payments,products,sendDM,inspect
     if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shop_admin_audit'").get())db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(user,'Verifikasi referensi TriPay untuk invoice '+invoice);
     return updated;
   }
-  return {recoverInvoice,errors:user=>{admin(user);return diagnostics?.recent()||[];},settings,configure,toggle,overdue,poll,reconcile,readiness,testDM};
+  return {remindInvoices,recoverInvoice,errors:user=>{admin(user);return diagnostics?.recent()||[];},settings,configure,toggle,overdue,poll,reconcile,readiness,testDM};
 }
 const label=k=>({paid_pending:'Pembayaran lunas, pesanan belum diproses',digital_pending:'Produk dibayar, menunggu admin',digital_dm:'Hasil produk / refund belum terkirim ke DM',otp_review:'Pembayaran OTP perlu diperiksa'}[k]||k);
 function createHealthHandler({discord,model,staff}){

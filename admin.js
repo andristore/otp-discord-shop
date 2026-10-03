@@ -79,7 +79,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(id==='admin_payment_records')return menu('Riwayat & Petunjuk','Riwayat transaksi dan petunjuk pembayaran manual.',[
       ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']], 'admin_transactions_menu');
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
-      ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway']]);
+      ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway'],['admin_order_channel','Channel Pesanan Selesai']]);
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Pilih kategori pengaturan bot.',[
       ['admin_system_access','Akses Bot'],['admin_system_provider','Provider & Webhook'],['admin_system_data','Data & Pemeliharaan']]);
     if(id==='admin_system_access')return menu('🔐 Akses Bot','Kelola admin serta izin server, channel, dan role pengguna bot.',[

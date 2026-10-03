@@ -34,7 +34,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
   if(!['QRIS','QRISC','QRIS2','QRIS_SHOPEEPAY'].includes(channel))throw new Error('TRIPAY_QRIS_CHANNEL tidak didukung. Gunakan kode channel QRIS aktif di akun TriPay.');
   db.exec(`CREATE TABLE IF NOT EXISTS topups(order_id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
   const columns=new Set(db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name));
-  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
+  for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT',expires_ms:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
   async function request(path,body,live=production) {
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
     const base=live?'https://tripay.co.id/api':'https://tripay.co.id/api-sandbox';
@@ -76,7 +76,7 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
   }
   const active=userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND gateway IN ('tripay','midtrans') AND credited=0 AND status IN ('creating','pending') ORDER BY created_at,rowid LIMIT 1").get(userId);
   function assertCanCreate(userId){const p=active(userId);if(p){const e=new Error('Masih ada tagihan QRIS aktif. Buka Tagihan Aktif untuk melanjutkan pembayaran; jangan membayar ulang.');e.code='ACTIVE_INVOICE';throw e;}}
-  const reserve=db.transaction((orderId,userId,amount,purpose)=>{assertCanCreate(userId);db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production) VALUES(?,?,?,?,'tripay',?,?)").run(orderId,userId,amount,purpose,channel,production?1:0);});
+  const reserve=db.transaction((orderId,userId,amount,purpose,expiry)=>{assertCanCreate(userId);db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production,expires_ms) VALUES(?,?,?,?,'tripay',?,?,?)").run(orderId,userId,amount,purpose,channel,production?1:0,expiry);});
   const midtrans=require('./midtrans').createMidtrans({db,fetchImpl,env,onSettled,assertCanCreate});
   async function create(userId,amount,options={}) {
     if(gateway==='midtrans')return midtrans.create(userId,amount,options);
@@ -84,9 +84,9 @@ function createPayments({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{
     const purpose=options.purpose==='purchase'?'purchase':'topup';
     amount=parseTopup(amount,purpose==='purchase'?1000:5000);const email=parseCustomerEmail(options.email);
     const orderId=options.orderId || 'maboyy-'+randomUUID();
-    reserve(orderId,userId,amount,purpose);
+    const expiry=(Math.floor(Date.now()/1000)+1200)*1000;reserve(orderId,userId,amount,purpose,expiry);
     let status;try{status=await request('/transaction/create',{method:channel,merchant_ref:orderId,amount,customer_name:String(options.name || 'Pembeli Hi, Belanja Produk Digital Yukk').slice(0,100),customer_email:email,
-      order_items:[{name:purpose==='purchase'?'Pembelian Hi, Belanja Produk Digital Yukk':'Isi Saldo Hi, Belanja Produk Digital Yukk',price:amount,quantity:1}],expired_time:Math.floor(Date.now()/1000)+1200,
+      order_items:[{name:purpose==='purchase'?'Pembelian Hi, Belanja Produk Digital Yukk':'Isi Saldo Hi, Belanja Produk Digital Yukk',price:amount,quantity:1}],expired_time:expiry/1000,
       signature:createHmac('sha256',privateKey).update(merchantCode+orderId+amount).digest('hex')});
     }catch(e){if(e.creationRejected)db.prepare("UPDATE topups SET status='failure' WHERE order_id=? AND status='creating' AND provider_ref IS NULL AND credited=0").run(orderId);throw e;}
     // Reuse the same strict checks for the charge response and subsequent detail responses.
