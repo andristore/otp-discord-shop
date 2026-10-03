@@ -39,8 +39,21 @@ function createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM,ba
     exporting=true;try{const file=downloadBackup(id);await sendDM(id,{content:'Salinan backup pribadi toko. Simpan file ini di tempat terpisah. Database memuat data pembeli dan produk; hanya owner yang menerima.',files:[{attachment:file,name:'shop-backup.db'}]});write('backup_dm_sent',name);write('backup_dm_error','');}
     catch{write('backup_dm_error','Salinan DM belum terkirim. Periksa izin DM dan ukuran file (maksimal 8 MB). Akan dicoba ulang.');}finally{exporting=false;}
   }
-  async function backup(id,force=false){if(id)owner(id);if(backupBusy)throw new Error('Backup sedang berjalan.');const day=new Date(now()+7*3600000).toISOString().slice(0,10);if(!force && (read('backup_enabled','1')!=='1' || read('backup_day','')===day)){await exportBackup();return;}
-    backupBusy=true;const file=path.join(dir,'shop-backup-'+now()+'-'+randomUUID()+'.db');try{fs.mkdirSync(dir,{recursive:true,mode:0o700});await db.backup(file);fs.chmodSync(file,0o600);if(openBackup){inspectBackup(file);write('backup_verified_at',new Date(now()).toISOString());write('backup_verified_file',path.basename(file));write('backup_verified_error','');}write('backup_day',day);write('backup_last',path.basename(file));write('backup_error','');const entries=fs.readdirSync(dir).filter(n=>/^shop-backup-\d+-[a-f0-9-]+\.db$/.test(n)).sort((a,b)=>a===path.basename(file)?-1:b===path.basename(file)?1:Number(b.split('-')[2])-Number(a.split('-')[2]));for(const n of entries.slice(7))fs.unlinkSync(path.join(dir,n));if(id)audit(id,'Buat backup database');await exportBackup();return file;}catch(e){write('backup_error','Backup gagal; periksa ruang volume dan log server.');try{fs.unlinkSync(file);}catch{}throw e;}finally{backupBusy=false;}}
+  async function backup(id,force=false){
+    if(id)owner(id);if(backupBusy)throw new Error('Backup sedang berjalan.');
+    const day=new Date(now()+7*3600000).toISOString().slice(0,10);
+    if(!force && (read('backup_enabled','1')!=='1'||read('backup_day','')===day)){await exportBackup();return;}
+    backupBusy=true;let committed=false;const file=path.join(dir,'shop-backup-'+now()+'-'+randomUUID()+'.db');
+    try{
+      fs.mkdirSync(dir,{recursive:true,mode:0o700});await db.backup(file);fs.chmodSync(file,0o600);if(openBackup)inspectBackup(file);
+      db.transaction(()=>{if(openBackup){write('backup_verified_at',new Date(now()).toISOString());write('backup_verified_file',path.basename(file));write('backup_verified_error','');}write('backup_day',day);write('backup_last',path.basename(file));write('backup_error','');if(id)audit(id,'Buat backup database');})();committed=true;
+      // Retention is housekeeping, not a reason to delete a valid committed backup.
+      try{const entries=fs.readdirSync(dir).filter(n=>/^shop-backup-\d+-[a-f0-9-]+\.db$/.test(n)).sort((a,b)=>a===path.basename(file)?-1:b===path.basename(file)?1:Number(b.split('-')[2])-Number(a.split('-')[2]));for(const n of entries.slice(7))fs.unlinkSync(path.join(dir,n));}
+      catch{write('backup_error','Backup terbaru berhasil, tetapi pembersihan backup lama gagal. Periksa izin/ruang volume.');}
+      await exportBackup();return file;
+    }catch(e){write('backup_error',committed?'Backup tersimpan, tetapi langkah setelah penyimpanan gagal. Periksa log server.':'Backup gagal atau tidak lolos verifikasi; periksa ruang volume dan log server.');if(!committed)try{fs.unlinkSync(file);}catch{}throw e;}finally{backupBusy=false;}
+  }
+
   function backupStatus(id){owner(id);return {enabled:read('backup_enabled','1')==='1',last:read('backup_last','Belum ada'),error:read('backup_error',''),dm:read('backup_dm_owner','')===id,dmError:read('backup_dm_error',''),verified:read('backup_verified_file','')===read('backup_last','')&&!!read('backup_verified_at',''),verifyError:read('backup_verified_error','')};}
   function backupToggle(id){owner(id);write('backup_enabled',read('backup_enabled','1')==='1'?'0':'1');audit(id,'Ubah jadwal backup');}
   function downloadBackup(id){owner(id);const name=read('backup_last','');if(!/^shop-backup-\d+-[a-f0-9-]+\.db$/.test(name))throw new Error('Backup belum tersedia.');const file=path.join(dir,name);if(fs.statSync(file).size>8*1024*1024)throw new Error('Backup melebihi 8 MB. Unduh lewat Railway; jangan kirim database ke channel publik.');return file;}
