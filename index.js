@@ -329,12 +329,12 @@ async function startDiscord(){
   function mainRow(){
     return [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("shop_products").setLabel("Beli OTP").setEmoji("🛒").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("shop_manual_products").setLabel("Produk Lainnya").setEmoji("📦").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("shop_games").setLabel("Topup Game").setEmoji("🎮").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("shop_manual_products").setLabel("Produk Lainnya").setEmoji("📦").setStyle(ButtonStyle.Primary)
+    ),new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("shop_balance").setLabel("Saldo").setEmoji("💰").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("shop_orders").setLabel("Pesanan").setEmoji("📦").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary)
-    ),new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("shop_games").setLabel("Top Up Game").setEmoji("🎮").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("shop_topup").setLabel("Isi Saldo").setEmoji("💳").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("shop_help").setLabel("Bantuan").setEmoji("❓").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("shop_language:shop").setLabel("Bahasa / Language").setEmoji("🌐").setStyle(ButtonStyle.Primary)
     )];
