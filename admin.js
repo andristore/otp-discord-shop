@@ -64,8 +64,14 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       ['admin_tools_coupons:0','Kelola Voucher']], 'admin_catalog_menu');
     if(id==='admin_balance_menu')return menu('👥 Pembeli','Akun, saldo, dan bantuan pembeli.',[
       ['admin_buyers_menu','Kelola Pembeli'],['admin_balance_add','Tambah Saldo'],['admin_balance_history','Riwayat Saldo Manual'],['admin_tools_tickets:0','Tiket Bantuan']]);
-    if(id==='admin_transactions_menu')return menu('💳 Pembayaran','Verifikasi pembayaran dan pengajuan.',[
-      ['admin_manual_orders:0','Pesanan Produk Manual'],['admin_store_requests:0','Pengajuan Manual'],['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']]);
+    if(id==='admin_transactions_menu')return menu('💳 Pembayaran','Pilih kategori pembayaran.',[
+      ['admin_payment_requests','Pesanan & Verifikasi'],['admin_payment_checks','Pemeriksaan'],['admin_payment_records','Riwayat & Petunjuk']]);
+    if(id==='admin_payment_requests')return menu('Pesanan & Verifikasi','Proses pesanan dan bukti pembayaran manual.',[
+      ['admin_manual_orders:0','Pesanan Produk'],['admin_store_requests:0','Pengajuan Saldo Manual']], 'admin_transactions_menu');
+    if(id==='admin_payment_checks')return menu('Pemeriksaan Pembayaran','Periksa pembayaran bermasalah atau tertunda.',[
+      ['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda']], 'admin_transactions_menu');
+    if(id==='admin_payment_records')return menu('Riwayat & Petunjuk','Riwayat transaksi dan petunjuk pembayaran manual.',[
+      ['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']], 'admin_transactions_menu');
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
       ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway']]);
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Pilih kategori pengaturan bot.',[
@@ -173,7 +179,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(await buyerBalances(Number(i.customId.split(':')[1]),i.customId.split(':')[2]||'all'));return true;
       }
-      if(['admin_catalog_menu','admin_catalog_provider','admin_catalog_manual','admin_catalog_promo','admin_balance_menu','admin_transactions_menu','admin_reports_menu','admin_system_menu','admin_system_access','admin_system_provider','admin_system_data'].includes(i.customId)) {
+      if(['admin_catalog_menu','admin_catalog_provider','admin_catalog_manual','admin_catalog_promo','admin_balance_menu','admin_transactions_menu','admin_payment_requests','admin_payment_checks','admin_payment_records','admin_reports_menu','admin_system_menu','admin_system_access','admin_system_provider','admin_system_data'].includes(i.customId)) {
         await i.update(section(i.customId));return true;
       }
       if(i.customId==='admin_topup_history' || i.customId==='admin_direct_history') {
