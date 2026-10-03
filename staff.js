@@ -3,10 +3,12 @@ function createStaff({db,env=process.env}) {
   db.exec(`CREATE TABLE IF NOT EXISTS store_staff(discord_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,updated_by TEXT NOT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS store_staff_audit(id INTEGER PRIMARY KEY,discord_id TEXT NOT NULL,owner_id TEXT NOT NULL,action TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
   const owners=ids(String(env.OWNER_DISCORD_IDS || '').trim() || env.ADMIN_DISCORD_IDS);
-  const isOwner=id=>owners.includes(String(id));
+  db.exec("CREATE TABLE IF NOT EXISTS store_owners(discord_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,updated_by TEXT NOT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+  const isOwner=id=>owners.includes(String(id))||db.prepare('SELECT enabled FROM store_owners WHERE discord_id=?').get(String(id))?.enabled===1;
+  const ownerList=()=>[...new Set([...owners,...db.prepare('SELECT discord_id FROM store_owners WHERE enabled=1 ORDER BY discord_id').all().map(p=>p.discord_id)])].map(id=>({id,owner:true,seed:owners.includes(id)}));
   db.exec('CREATE TABLE IF NOT EXISTS store_guild_contacts(guild_id TEXT PRIMARY KEY,admin_id TEXT NOT NULL,updated_by TEXT NOT NULL)');
   function contactIds(guildId) {
-    if(!guildId)return owners.slice(0,1);
+    if(!guildId)return ownerList().slice(0,1).map(p=>p.id);
     const contact=db.prepare('SELECT admin_id FROM store_guild_contacts WHERE guild_id=?').get(String(guildId));
     return contact&&isAdmin(contact.admin_id)?[contact.admin_id]:[];
   }
@@ -23,7 +25,7 @@ function createStaff({db,env=process.env}) {
   }
   function list() {
     const saved=db.prepare('SELECT * FROM store_staff').all();
-    const active=new Set([...owners,...ids(env.ADMIN_DISCORD_IDS)]);
+    const active=new Set([...ownerList().map(p=>p.id),...ids(env.ADMIN_DISCORD_IDS)]);
     for(const s of saved){if(s.enabled)active.add(s.discord_id);else if(!isOwner(s.discord_id))active.delete(s.discord_id);}
     return [...active].sort().map(id=>({id,owner:isOwner(id)}));
   }
@@ -37,30 +39,59 @@ function createStaff({db,env=process.env}) {
       db.prepare('INSERT INTO store_staff_audit(discord_id,owner_id,action) VALUES(?,?,?)').run(id,ownerId,enabled?'grant':'revoke');
     })();
   }
-  return {isOwner,isAdmin,list,ids:()=>list().map(s=>s.id),change,contactIds,setContact};
+  function changeOwner(actor,target,enabled){
+    if(!isOwner(actor))throw Error('Hanya owner boleh mengelola owner.');
+    target=String(target);if(!/^\d{17,20}$/.test(target)||![0,1].includes(enabled))throw Error('ID/status owner tidak valid.');
+    if(owners.includes(target)){if(enabled===1)return;throw Error('Owner utama dari Variables tidak bisa dicabut lewat bot.');}
+    db.transaction(()=>{if(!isOwner(actor))throw Error('Akses owner sudah dicabut.');const old=db.prepare('SELECT enabled FROM store_owners WHERE discord_id=?').get(target);if(old?.enabled===enabled)return;
+      db.prepare('INSERT INTO store_owners(discord_id,enabled,updated_by) VALUES(?,?,?) ON CONFLICT(discord_id) DO UPDATE SET enabled=excluded.enabled,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP').run(target,enabled,String(actor));
+      db.prepare('INSERT INTO store_staff_audit(discord_id,owner_id,action) VALUES(?,?,?)').run(target,String(actor),enabled?'owner_grant':'owner_revoke');
+    })();
+  }
+  return {ownerList,changeOwner,isOwner,isAdmin,list,ids:()=>list().map(s=>s.id),change,contactIds,setContact};
 }
 function createStaffHandler({discord,staff,resolveUser}) {
   const {ActionRowBuilder,ButtonBuilder,ButtonStyle,ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
+  const ownerApprovals=new Map();
   const row=choices=>new ActionRowBuilder().addComponents(...choices.map(([id,label])=>new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(ButtonStyle.Secondary)));
   return async i=>{
     const id=String(i.customId || '');if(!id.startsWith('admin_staff_'))return false;
     if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     if(id==='admin_staff_access') {
-      const r=row([['admin_staff_list:0','Kelola Admin Toko'],['admin_system_menu','Kembali']]);r.components[0].setDisabled(!staff.isOwner(i.user.id));
-      await i.reply({ephemeral:true,content:'**Admin Toko**\nOwner dapat menambahkan dan mencabut akses admin toko.',components:[r]});return true;
+      const isOwner=staff.isOwner(i.user.id);
+      const r=row([['admin_staff_list:0','Kelola Admin'],...(isOwner?[['admin_staff_owner_list:0','Kelola Owner']]:[]),['admin_system_menu','Kembali']]);r.components[0].setDisabled(!isOwner);
+      await i.reply({ephemeral:true,content:'**Owner & Admin**\nOwner mengelola seluruh toko termasuk Digiflazz dan akses pengguna. Admin mengelola operasional toko; pengelolaan Digiflazz khusus owner.',components:[r]});return true;
     }
     if(!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Hanya owner toko yang boleh mengelola admin.'});return true;}
     if(id==='admin_staff_contact') {
       if(!i.guildId){await i.reply({ephemeral:true,content:'Buka /admin di server yang ingin diatur kontaknya.'});return true;}
       await i.showModal(new ModalBuilder().setCustomId('admin_staff_contact_save').setTitle('Kontak Admin Server Ini').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID Discord admin untuk server ini').setRequired(true).setMaxLength(20).setStyle(TextInputStyle.Short))));return true;
     }
+    if(id==='admin_staff_owner_add'){await i.showModal(new ModalBuilder().setCustomId('admin_staff_owner_save').setTitle('Tambah Owner').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID Discord calon owner').setRequired(true).setMaxLength(20).setStyle(TextInputStyle.Short))));return true;}
     if(id==='admin_staff_add') {
       await i.showModal(new ModalBuilder().setCustomId('admin_staff_save').setTitle('Tambah Admin Toko')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('ID Discord pengguna calon admin').setRequired(true).setMaxLength(20).setStyle(TextInputStyle.Short))));return true;
     }
     await i.deferReply({ephemeral:true});
     try {
-      if(id==='admin_staff_contact_save') {
+      if(id==='admin_staff_owner_save'){
+        const target=i.fields.getTextInputValue('id').trim();if(!/^\d{17,20}$/.test(target))throw Error('ID pengguna tidak valid.');const user=await resolveUser(target);if(!user||user.bot)throw Error('Gunakan akun pengguna, bukan bot.');if(!staff.isOwner(i.user.id))throw Error('Akses owner telah dicabut.');
+        for(const [k,v]of ownerApprovals)if(v.expires<Date.now())ownerApprovals.delete(k);
+        const token=require('node:crypto').randomUUID();ownerApprovals.set(token,{actor:i.user.id,target,expires:Date.now()+300000});
+        await i.editReply({content:`Jadikan ${target} sebagai **Owner**? Owner mendapat pengelolaan Digiflazz, keuangan, serta tambah/cabut owner dan admin.`,allowedMentions:{parse:[]},components:[row([['admin_staff_owner_confirm:'+token,'Ya, Tambah Owner'],['admin_staff_owner_list:0','Batal']])]});
+      }else if(id.startsWith('admin_staff_owner_confirm:')){
+        const key=id.split(':')[1],p=ownerApprovals.get(key);if(!p||p.actor!==i.user.id||p.expires<Date.now())throw Error('Konfirmasi kedaluwarsa atau bukan milik Anda.');ownerApprovals.delete(key);staff.changeOwner(i.user.id,p.target,1);await i.editReply({content:'✅ Owner '+p.target+' ditambahkan.',components:[row([['admin_staff_owner_list:0','Daftar Owner']])]});
+      }else if(id.startsWith('admin_staff_owner_revoke_confirm:')){
+        const target=id.split(':')[1];await i.editReply({content:'Cabut peran Owner '+target+'? Jika sebelumnya memiliki peran admin, akses admin tetap berlaku.',components:[row([['admin_staff_owner_revoke:'+target,'Ya, Cabut Owner'],['admin_staff_owner_list:0','Batal']])]});
+      }else if(id.startsWith('admin_staff_owner_revoke:')){
+        const target=id.split(':')[1];staff.changeOwner(i.user.id,target,0);await i.editReply({content:'✅ Peran owner '+target+' dicabut.',components:[row([['admin_staff_owner_list:0','Daftar Owner']])]});
+      }else if(id.startsWith('admin_staff_owner_detail:')){
+        const target=id.split(':')[1],p=staff.ownerList().find(p=>p.id===target);if(!p)throw Error('Owner tidak ditemukan.');await i.editReply({content:'Owner: '+target+'\n'+(p.seed?'Owner utama dari Variables; pencabutan melalui pengaturan Railway.':'Owner tambahan; dapat dicabut oleh owner.'),components:[row([...(p.seed?[]:[['admin_staff_owner_revoke_confirm:'+target,'Cabut Owner']]),['admin_staff_owner_list:0','Kembali']])]});
+      }else if(id.startsWith('admin_staff_owner_list:')){
+        const all=staff.ownerList(),pages=Math.max(1,Math.ceil(all.length/5)),requested=Number(id.split(':')[1]),page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1),components=[];
+        if(all.length)components.push(row(all.slice(page*5,page*5+5).map(p=>['admin_staff_owner_detail:'+p.id,(p.seed?'Utama • ':'Owner • ')+p.id])));
+        const nav=row([['admin_staff_owner_list:'+(page-1),'Sebelumnya'],['admin_staff_owner_list:'+(page+1),'Berikutnya'],['admin_staff_owner_add','Tambah Owner'],['admin_staff_access','Kembali']]);nav.components[0].setDisabled(page===0);nav.components[1].setDisabled(page===pages-1);components.push(nav);await i.editReply({content:'**Owner Toko**\nHalaman '+(page+1)+'/'+pages+' • '+all.length+' owner',components});
+      }else if(id==='admin_staff_contact_save') {
         const target=i.fields.getTextInputValue('id').trim(),user=await resolveUser(target);
         if(!user||user.bot)throw Error('Pilih akun admin pengguna, bukan bot.');
         staff.setContact(i.user.id,i.guildId,target);
@@ -77,7 +108,7 @@ function createStaffHandler({discord,staff,resolveUser}) {
           await i.editReply({content:`ID: ${target}\nPeran: ${staff.isOwner(target)?'Owner':'Admin'}\nAdmin dapat mengelola saldo, harga, transaksi dan izin server toko. Pencabutan akses berlaku segera.`,components:[row(actions)]});
         }
       } else if(id.startsWith('admin_staff_list:')) {
-        const all=staff.list(),pages=Math.max(1,Math.ceil(all.length/5)),requested=Number(id.split(':')[1]);
+        const all=staff.list().filter(p=>!p.owner),pages=Math.max(1,Math.ceil(all.length/5)),requested=Number(id.split(':')[1]);
         const page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1),components=[];
         if(all.length)components.push(row(all.slice(page*5,page*5+5).map(s=>['admin_staff_detail:'+s.id,`${s.owner?'Owner':'Admin'} • ${s.id}`])));
         const nav=row([[`admin_staff_list:${page-1}`,'Sebelumnya'],[`admin_staff_list:${page+1}`,'Berikutnya'],['admin_staff_add','Tambah Admin'],['admin_staff_access','Kembali']]);nav.components[0].setDisabled(page===0);nav.components[1].setDisabled(page===pages-1);components.push(nav);

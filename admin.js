@@ -81,9 +81,9 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
       ['admin_tools_report:day','Hari Ini'],['admin_tools_report:month','Bulan Ini'],['admin_tools_fees:0','Riwayat Biaya Gateway'],['admin_order_channel','Channel Pesanan Selesai']]);
     if(id==='admin_system_menu')return menu('🛠️ Sistem','Pilih kategori pengaturan bot.',[
-      ['admin_system_access','Akses Bot'],['admin_system_provider','Provider & Webhook'],['admin_system_data','Data & Pemeliharaan']]);
-    if(id==='admin_system_access')return menu('🔐 Akses Bot','Kelola admin serta izin server, channel, dan role pengguna bot.',[
-      ['admin_staff_access','Admin Toko'],['admin_ops_server_menu','Server & Channel'],['admin_shop_panel','Panel Toko']], 'admin_system_menu');
+      ['admin_staff_access','Owner & Admin'],['admin_system_access','Akses Bot'],['admin_system_provider','Provider & Webhook'],['admin_system_data','Data & Pemeliharaan']]);
+    if(id==='admin_system_access')return menu('🔐 Akses Bot','Kelola izin server, channel, role pengguna bot, dan panel toko.',[
+      ['admin_ops_server_menu','Server & Channel'],['admin_shop_panel','Panel Toko']], 'admin_system_menu');
     if(id==='admin_system_provider')return menu('📱 Provider & Webhook','Saldo, pembelian owner, tes webhook, dan peringatan provider.',[
       ['admin_health','Saldo Provider (Owner)'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook SMSCode'],['admin_ops_low','Peringatan Saldo']], 'admin_system_menu');
     if(id==='admin_system_data')return menu('🗂️ Data & Pemeliharaan','Backup data, aktivitas admin, dan status operasional toko.',[
@@ -108,7 +108,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         new ButtonBuilder().setCustomId('admin_balance_menu').setLabel('Kembali').setStyle(ButtonStyle.Secondary)
       ),new ActionRowBuilder().addComponents(...[['all','Semua Akun'],['positive','Memiliki Saldo'],['zero','Saldo Nol']].map(([key,label])=>new ButtonBuilder().setCustomId('admin_balances:0:'+key+':filter').setLabel(label).setStyle(ButtonStyle.Primary).setDisabled(filter===key)))]};
   }
-  function home() {
+  function home(user) {
     return {content:'',embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Panel Admin')
       .setDescription('Pilih kategori untuk mengelola Hi, Belanja Produk Digital Yukk.')],components:[
       new ActionRowBuilder().addComponents(
@@ -118,7 +118,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         new ButtonBuilder().setCustomId('admin_reports_menu').setLabel('Laporan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Sistem').setStyle(ButtonStyle.Primary)
       ),new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('admin_digiflazz').setLabel('Digiflazz').setStyle(ButtonStyle.Primary),
+        ...(staff?.isOwner?.(user)?[new ButtonBuilder().setCustomId('admin_digiflazz').setLabel('Digiflazz (Owner)').setStyle(ButtonStyle.Primary)]:[]),
         new ButtonBuilder().setCustomId('admin_eff_summary').setLabel('Ringkasan').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('admin_close').setLabel('Tutup Panel').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('shop_language:admin').setLabel('Bahasa / Language').setStyle(ButtonStyle.Primary)
@@ -173,7 +173,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       await i.reply({ephemeral:true,content:'Akses ditolak. ID Discord Anda belum terdaftar sebagai admin toko.'});
       return true;
     }
-    if(command) { await i.reply({ephemeral:true,...home()}); return true; }
+    if(command) { await i.reply({ephemeral:true,...home(i.user.id)}); return true; }
     if(pingCommand || i.isButton()) {
       if(pingCommand || i.customId==='admin_bot_ping'){
         const started=Date.now();await i.deferReply({ephemeral:true});const metrics=measureHealth();
@@ -223,7 +223,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         else await i.showModal(productModal(p));
       }
       else if(i.customId==='admin_add') await i.showModal(productModal());
-      else if(i.customId==='admin_home') await i.update(home());
+      else if(i.customId==='admin_home') await i.update(home(i.user.id));
       else if(i.customId==='admin_close') await i.update({content:'Panel admin ditutup. Ketik /admin untuk membukanya kembali.',embeds:[],components:[]});
       else if(i.customId.startsWith('admin_products:')) await i.update(products(Number(i.customId.split(':')[1])));
       return true;
@@ -256,7 +256,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       try {
         const settings=pricing.set(i.fields.getTextInputValue('percent'),i.fields.getTextInputValue('fee'));
         audit(i.user.id,'Ubah harga jual: '+settings.basisPoints/100+'% + '+settings.fee+' IDR');
-        await i.reply({ephemeral:true,content:`✅ Harga jual semua layanan: harga provider + ${settings.basisPoints/100}% + ${amount(settings.fee)}. Pecahan dibulatkan ke atas. Contoh provider 5.000 IDR → jual ${amount(pricing.price(5000))}.`,components:home().components});
+        await i.reply({ephemeral:true,content:`✅ Harga jual semua layanan: harga provider + ${settings.basisPoints/100}% + ${amount(settings.fee)}. Pecahan dibulatkan ke atas. Contoh provider 5.000 IDR → jual ${amount(pricing.price(5000))}.`,components:home(i.user.id).components});
       }catch(e){await i.reply({ephemeral:true,content:e.message});}
       return true;
     }
@@ -273,7 +273,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         if(!result.changes) { await i.reply({ephemeral:true,content:'Produk lokal tidak ditemukan.'}); return true; }
       }
       audit(i.user.id,'Simpan produk lokal '+p.name+' ('+p.price+' IDR)');
-      await i.reply({ephemeral:true,content:'✅ Produk lokal tersimpan.',components:home().components});
+      await i.reply({ephemeral:true,content:'✅ Produk lokal tersimpan.',components:home(i.user.id).components});
       return true;
     }
     await i.reply({ephemeral:true,content:'Menu admin tidak dikenali. Buka /admin kembali.'});
