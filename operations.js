@@ -17,7 +17,7 @@ function createOperations({db,smscode,smsOrder,smsCancel,payments,env=process.en
     db.transaction(()=>{write('manual_instructions',text);db.prepare('INSERT INTO admin_settings_audit(admin_id,setting) VALUES(?,?)').run(adminId,'Pembayaran manual');})();
   }
   function saveLow(adminId,threshold,enabled) {
-    if(staff && !staff.isAdmin(adminId))throw new Error('Akses admin sudah dicabut.');
+    if(staff && !staff.isOwner(adminId))throw new Error('Peringatan saldo provider khusus owner.');
     if(!/^\d+$/.test(String(threshold)) || !Number.isSafeInteger(Number(threshold)) || Number(threshold)>100000000 || !['0','1'].includes(enabled))throw new Error('Batas saldo 0–100.000.000 rupiah; status 1 aktif atau 0 nonaktif.');
     db.transaction(()=>{write('low_threshold',threshold);write('low_enabled',enabled);write('low_notified','');db.prepare('INSERT INTO admin_settings_audit(admin_id,setting) VALUES(?,?)').run(adminId,'Peringatan saldo provider');})();
   }
@@ -185,7 +185,7 @@ function createOperationsHandler({discord,ops}) {
     await i.deferReply({ephemeral:true});
     try {
       if(id==='admin_ops_manual_save') {ops.saveManual(i.user.id,i.fields.getTextInputValue('instructions'));await i.editReply({content:'✅ Petunjuk pembayaran manual tersimpan. Pembeli melihatnya saat Isi Saldo → Manual.'});}
-      else if(id==='admin_ops_low_save') {ops.saveLow(i.user.id,i.fields.getTextInputValue('threshold').trim(),i.fields.getTextInputValue('enabled').trim());await i.editReply({content:'✅ Pengaturan peringatan saldo tersimpan. Peringatan dikirim melalui DM admin.'});}
+      else if(id==='admin_ops_low_save') {ops.saveLow(i.user.id,i.fields.getTextInputValue('threshold').trim(),i.fields.getTextInputValue('enabled').trim());await i.editReply({content:'✅ Pengaturan peringatan saldo tersimpan. Peringatan dikirim melalui DM owner.'});}
       else if(id==='admin_ops_buyer_find'||id.startsWith('admin_ops_buyer_page:')) {
         const parts=id.split(':'),r=id==='admin_ops_buyer_find'?ops.search(i.user.id,null,0,i.fields.getTextInputValue('buyer')):ops.search(i.user.id,parts[1],Number(parts[2]));
         await hydrateBuyers(r.rows.map(b=>b.discord_id));

@@ -1,3 +1,4 @@
+const {ownerOnly,privateMenu}=require('./owner-privacy');
 const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
 let staffAccess;
 function configureAdminAccess(access) {staffAccess=access;}
@@ -59,7 +60,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(back).setLabel('Kembali').setStyle(ButtonStyle.Secondary))
     ]};
   }
-  function section(id) {
+  function rawSection(id) {
     if(id==='admin_catalog_menu')return menu('🏪 Toko','Pilih kategori yang ingin dikelola.\n\n📱 OTP Provider — layanan SMSCode dan markup harga.\n📦 Produk Lainnya — produk digital, stok, dan harga jual.\n🎟️ Promo — voucher diskon.',[
       ['admin_catalog_provider','📱 OTP Provider'],['admin_catalog_manual','📦 Produk Lainnya'],['admin_catalog_promo','🎟️ Promo']]);
     if(id==='admin_catalog_provider')return menu('📱 OTP Provider','Periksa katalog SMSCode atau atur markup harga jual OTP.',[
@@ -85,10 +86,12 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
     if(id==='admin_system_access')return menu('🔐 Akses Bot','Kelola izin server, channel, role pengguna bot, dan panel toko.',[
       ['admin_ops_server_menu','Server & Channel'],['admin_shop_panel','Panel Toko']], 'admin_system_menu');
     if(id==='admin_system_provider')return menu('📱 Provider & Webhook','Saldo, pembelian owner, tes webhook, dan peringatan provider.',[
-      ['admin_health','Saldo Provider (Owner)'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook SMSCode'],['admin_ops_low','Peringatan Saldo']], 'admin_system_menu');
+      ['admin_health','Saldo Provider (Owner)'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook (Owner)'],['admin_ops_low','Peringatan Saldo (Owner)']], 'admin_system_menu');
     if(id==='admin_system_data')return menu('🗂️ Data & Pemeliharaan','Backup data, aktivitas admin, dan status operasional toko.',[
       ['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_store_maintenance','Maintenance'],['admin_bot_ping','Ping & Kecepatan Bot'],['admin_healthcheck','Kesiapan Toko']], 'admin_system_menu');
   }
+  const isOwner=user=>staff?.isOwner?staff.isOwner(user):((process.env.OWNER_DISCORD_IDS||process.env.ADMIN_DISCORD_IDS||'').split(',').map(x=>x.trim()).includes(String(user)));
+  const section=(id,user)=>privateMenu(rawSection(id),isOwner(user));
   async function buyerBalances(requested=0,filter="all") {
     if(!["all","positive","zero"].includes(filter))throw Error("Filter saldo tidak dikenal.");
     const visible=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='buyer_account_status'").get()?" WHERE NOT EXISTS(SELECT 1 FROM buyer_account_status s WHERE s.discord_id=users.discord_id AND s.state IN ('archived','deleted'))":"";
@@ -173,7 +176,8 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
       await i.reply({ephemeral:true,content:'Akses ditolak. ID Discord Anda belum terdaftar sebagai admin toko.'});
       return true;
     }
-    if(command) { await i.reply({ephemeral:true,...home(i.user.id)}); return true; }
+    if(ownerOnly(i.customId)&&!isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak. Fitur privat ini khusus owner toko.'});return true;}
+    if(command) { await i.reply({ephemeral:true,...privateMenu(home(i.user.id),isOwner(i.user.id))}); return true; }
     if(pingCommand || i.isButton()) {
       if(pingCommand || i.customId==='admin_bot_ping'){
         const started=Date.now();await i.deferReply({ephemeral:true});const metrics=measureHealth();
@@ -186,7 +190,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         await i.update(await buyerBalances(Number(i.customId.split(':')[1]),i.customId.split(':')[2]||'all'));return true;
       }
       if(['admin_catalog_menu','admin_catalog_provider','admin_catalog_manual','admin_catalog_promo','admin_balance_menu','admin_transactions_menu','admin_payment_requests','admin_payment_checks','admin_payment_records','admin_reports_menu','admin_system_menu','admin_system_access','admin_system_provider','admin_system_data'].includes(i.customId)) {
-        await i.update(section(i.customId));return true;
+        await i.update(section(i.customId,i.user.id));return true;
       }
       if(i.customId==='admin_topup_history' || i.customId==='admin_direct_history') {
         const topup=i.customId==='admin_topup_history';
@@ -223,7 +227,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         else await i.showModal(productModal(p));
       }
       else if(i.customId==='admin_add') await i.showModal(productModal());
-      else if(i.customId==='admin_home') await i.update(home(i.user.id));
+      else if(i.customId==='admin_home') await i.update(privateMenu(home(i.user.id),isOwner(i.user.id)));
       else if(i.customId==='admin_close') await i.update({content:'Panel admin ditutup. Ketik /admin untuk membukanya kembali.',embeds:[],components:[]});
       else if(i.customId.startsWith('admin_products:')) await i.update(products(Number(i.customId.split(':')[1])));
       return true;

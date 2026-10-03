@@ -1,3 +1,4 @@
+const {protectOwnerInteraction}=require('./owner-privacy');
 require("dotenv").config();
 const express = require("express");
 const session = require("express-session");
@@ -376,6 +377,7 @@ async function startDiscord(){
     try {
       const id=i.user.id;
       languages.attach(i);
+      if(await protectOwnerInteraction(i,staff))return;
       if(await serverAccess.gate(i))return;
       rememberBuyer(i.user);buyerManagement.touch(i.user.id);
       if(await languages.handle(i,()=>({embeds:[shopEmbed()],components:mainRow()})))return;
