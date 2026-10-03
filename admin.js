@@ -42,7 +42,7 @@ function createManualBalance(db) {
   });
 }
 
-function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audit=()=>{}}) {
+function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,measureHealth=()=>({}),audit=()=>{}}) {
   let creditBalance;
   const {EmbedBuilder,ActionRowBuilder,ButtonBuilder,ButtonStyle,
     ModalBuilder,TextInputBuilder,TextInputStyle}=discord;
@@ -63,7 +63,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audi
     if(id==='admin_catalog_promo')return menu('🎟️ Promo','Buat voucher dan atur status promo toko.',[
       ['admin_tools_coupons:0','Kelola Voucher']], 'admin_catalog_menu');
     if(id==='admin_balance_menu')return menu('👥 Pembeli','Akun, saldo, dan bantuan pembeli.',[
-      ['admin_balances:0','Daftar Saldo'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo'],['admin_balance_history','Riwayat Saldo Manual'],['admin_tools_tickets:0','Tiket Bantuan']]);
+      ['admin_balances:0','Daftar Saldo'],['admin_buyers_list:active:0','Kelola Pembeli'],['admin_ops_buyer','Cari Pembeli'],['admin_balance_add','Tambah Saldo'],['admin_balance_history','Riwayat Saldo Manual'],['admin_tools_tickets:0','Tiket Bantuan']]);
     if(id==='admin_transactions_menu')return menu('💳 Pembayaran','Verifikasi pembayaran dan pengajuan.',[
       ['admin_manual_orders:0','Pesanan Produk Manual'],['admin_store_requests:0','Pengajuan Manual'],['admin_payment_issues','Perlu Diperiksa'],['admin_tools_reconcile','Cek Topup Tertunda'],['admin_topup_history','Riwayat Isi Saldo'],['admin_direct_history','Riwayat QRIS Beli'],['admin_ops_manual','Petunjuk Bayar Manual']]);
     if(id==='admin_reports_menu')return menu('📊 Laporan','Penjualan, biaya, dan ekspor CSV.',[
@@ -75,19 +75,20 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audi
     if(id==='admin_system_provider')return menu('📱 Provider & Webhook','Saldo, pembelian owner, tes webhook, dan peringatan provider.',[
       ['admin_health','Saldo Provider (Owner)'],['admin_test_otp','Beli OTP Provider (Owner)'],['admin_smscode_webhook_test','Tes Webhook SMSCode'],['admin_ops_low','Peringatan Saldo']], 'admin_system_menu');
     if(id==='admin_system_data')return menu('🗂️ Data & Pemeliharaan','Backup data, aktivitas admin, dan status operasional toko.',[
-      ['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_store_maintenance','Maintenance']], 'admin_system_menu');
+      ['admin_tools_backup','Backup (Owner)'],['admin_tools_audit:0','Aktivitas Admin'],['admin_store_maintenance','Maintenance'],['admin_bot_ping','Ping & Kecepatan Bot']], 'admin_system_menu');
   }
   async function buyerBalances(requested=0,filter="all") {
     if(!["all","positive","zero"].includes(filter))throw Error("Filter saldo tidak dikenal.");
-    const where=filter==="positive"?" WHERE balance>0":filter==="zero"?" WHERE balance=0":"";
+    const visible=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='buyer_account_status'").get()?" WHERE NOT EXISTS(SELECT 1 FROM buyer_account_status s WHERE s.discord_id=users.discord_id AND s.state IN ('archived','deleted'))":"";
+    const where=visible+(visible?' AND ':' WHERE ')+(filter==='positive'?'balance>0':filter==='zero'?'balance=0':'1=1');
     const title={all:"Semua akun",positive:"Memiliki saldo",zero:"Saldo nol"}[filter];
-    const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total, COALESCE(SUM(CASE WHEN balance>0 THEN 1 ELSE 0 END),0) funded FROM users').get();
+    const summary=db.prepare('SELECT COUNT(*) count, COALESCE(SUM(balance),0) total, COALESCE(SUM(CASE WHEN balance>0 THEN 1 ELSE 0 END),0) funded FROM users'+visible).get();
     const pages=Math.max(1,Math.ceil(db.prepare("SELECT COUNT(*) n FROM users"+where).get().n/10));
     const page=Math.min(Math.max(Number.isSafeInteger(requested)?requested:0,0),pages-1);
     const rows=db.prepare('SELECT discord_id,balance FROM users'+where+' ORDER BY balance DESC, discord_id ASC LIMIT 10 OFFSET ?').all(page*10);
     await hydrateBuyers(rows.map(r=>r.discord_id));
     return {content:'',allowedMentions:{parse:[]},embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💰 Daftar Saldo Pembeli')
-      .setDescription(`Total saldo akun: **${amount(summary.total)}**\nJumlah akun: **${summary.count}** • Memiliki saldo: **${summary.funded}**\nTampilan: **${title}**\n\n${rows.length?rows.map((r,n)=>`${page*10+n+1}. ${buyerLabel(r.discord_id,false)}\nID: ${r.discord_id}\nSaldo: **${amount(r.balance)}**`).join('\n\n'):(filter==='all'?'Belum ada akun pembeli tersimpan.':'Belum ada akun pada filter ini.')}`)
+      .setDescription(`Total saldo akun aktif: **${amount(summary.total)}**\nJumlah akun: **${summary.count}** • Memiliki saldo: **${summary.funded}**\nTampilan: **${title}**\n\n${rows.length?rows.map((r,n)=>`${page*10+n+1}. ${buyerLabel(r.discord_id,false)}\nID: ${r.discord_id}\nSaldo: **${amount(r.balance)}**`).join('\n\n'):(filter==='all'?'Belum ada akun pembeli tersimpan.':'Belum ada akun pada filter ini.')}`)
       .setFooter({text:`Halaman ${page+1}/${pages} • ${db.prepare("SELECT COUNT(*) n FROM users"+where).get().n} akun • Urutan saldo terbesar`})],components:[new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`admin_balances:${page-1}:${filter}`).setLabel('Sebelumnya').setStyle(ButtonStyle.Secondary).setDisabled(page===0),
         new ButtonBuilder().setCustomId(`admin_balances:${page+1}:${filter}`).setLabel('Berikutnya').setStyle(ButtonStyle.Secondary).setDisabled(page===pages-1),
@@ -159,6 +160,13 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,audi
     if(command) { await i.reply({ephemeral:true,...home()}); return true; }
     if(['admin_test_otp','admin_health'].includes(i.customId)&&staff&&!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Hanya owner dapat melihat saldo dan membeli langsung dari provider.'});return true;}
     if(i.isButton()) {
+      if(i.customId==='admin_bot_ping'){
+        const started=Date.now();await i.deferReply({ephemeral:true});const metrics=measureHealth();
+        if(!isDiscordAdmin(i.user.id))throw Error('Akses admin sudah dicabut.');
+        const ms=n=>Number.isFinite(n)&&n>=0?n.toFixed(1)+' ms':'Belum tersedia';
+        const ping=metrics.discord,quality=!Number.isFinite(ping)||ping<0?'Menunggu koneksi':ping<150?'Cepat':ping<300?'Cukup responsif':'Latensi tinggi';
+        await i.editReply({content:`**📡 Ping & Kecepatan Bot**\nKoneksi Discord: **${ms(ping)}** • ${quality}\nProses hingga respons awal: **${ms(Date.now()-started)}**\nAkses database: **${ms(metrics.database)}**\nRAM proses: **${Number.isFinite(metrics.ram)?metrics.ram.toFixed(1)+' MB':'Belum tersedia'}**\nWaktu berjalan: **${Math.floor(process.uptime()/60)} menit**\n\nLatensi lebih rendah berarti respons lebih cepat. Nilai koneksi berasal dari heartbeat Discord.`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_bot_ping').setLabel('Tes Ulang').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_data').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
+      }
       if(i.customId==='admin_test_otp'){
         await i.reply({ephemeral:true,content:'**Tes Pembelian OTP — Admin**\n\nTes menggunakan nomor SMSCode sungguhan. Pilih aplikasi, negara, operator, dan produk; harga ditampilkan sebelum Anda mengonfirmasi pembayaran.\n\nPembayaran memakai saldo akun admin atau QRIS yang tersedia. Saldo provider SMSCode juga harus cukup. Menekan Mulai Tes belum membeli nomor.\n\nSetelah order berhasil, gunakan nomor pada layanan yang dipilih untuk meminta SMS. Bot akan memperbarui status/OTP melalui webhook atau polling cadangan, lalu mengirim OTP ke DM akun admin yang membeli.\n\nOrder tetap tercatat di Riwayat OTP dan Riwayat Pesanan. Ini bukan transaksi gratis/simulasi; aturan pembatalan dan refund biasa tetap berlaku.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('shop_products').setLabel('Mulai Tes Pembelian OTP').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_menu').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
       }

@@ -13,6 +13,7 @@ const {
 
 const {createBuyerProfiles,configureBuyerProfiles,rememberBuyer}=require("./buyer-profiles");
 const {createManualProducts,createManualProductsHandler}=require("./manual-products");
+const {createBuyerManagement,createBuyerManagementHandler}=require("./buyer-management");
 const {createOrderHistory,createOrderHistoryHandler}=require("./order-history");
 const {createAdminHandler,configureAdminAccess}=require("./admin");
 const {createPurchaseFlow}=require("./purchase-flow");
@@ -317,12 +318,15 @@ async function startDiscord(){
 
   const efficiency=createEfficiency({db,staff});
   const toolkit=createShopTools({db,staff,payments,smsCatalogProducts,pricing,sendDM:sendDiscordDM,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups")});
+  const buyerManagement=createBuyerManagement({db,staff});
+  const handleBuyerManagement=createBuyerManagementHandler({discord:require("discord.js"),model:buyerManagement,staff});
+  const buyerArchivePoll=setInterval(()=>{try{buyerManagement.sweep();}catch(e){console.error(e);}},3600000);buyerArchivePoll.unref();buyerManagement.sweep();
   const buyerProfiles=createBuyerProfiles({db,resolveUser:id=>client.users.fetch(id)});
   configureBuyerProfiles(buyerProfiles);
   commerce.setCoupons(toolkit.coupons);
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations});
-  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),audit:toolkit.audit});
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024};},audit:toolkit.audit});
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(withHome(payload));}});
   const handleOrderHistory=createOrderHistoryHandler({discord:require("discord.js"),model:createOrderHistory({db}),payments});
   const handleFlow=createPurchaseFlow({discord:require("discord.js"),smscode,smsCatalogProducts,pricing,resolveFavorite:(user,id)=>efficiency.favorite(user,id)});
@@ -340,7 +344,7 @@ async function startDiscord(){
     try {
       const id=i.user.id;
       if(await serverAccess.gate(i))return;
-      rememberBuyer(i.user);
+      rememberBuyer(i.user);buyerManagement.touch(i.user.id);
       addHomeNavigation(i);
       if(i.isButton() && (i.customId===HOME_ID || i.customId==='manual_back')){
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
@@ -358,6 +362,7 @@ async function startDiscord(){
       if(await handleSMSWebhook(i))return;
       if(await handleOperations(i)) return;
       if(await handleManualProducts(i)) return;
+      if(await handleBuyerManagement(i))return;
       if(await handleAdmin(i)) return;
       if(await handleProviderFlow(i)) return;
       if(await handlePayment(i)) return;
