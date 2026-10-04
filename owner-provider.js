@@ -4,7 +4,7 @@ function createOwnerProviderHandler({discord,staff,commerce,smscode,smsCatalogPr
   const money=n=>Number(n).toLocaleString('id-ID')+' IDR';
   return async i=>{
     const id=String(i.customId||'');
-    if(!['admin_test_otp','admin_health'].includes(id)&&!id.startsWith('admin_owner_'))return false;
+    if(!['admin_test_otp','admin_health'].includes(id)&&!id.startsWith('admin_owner_quote:')&&!id.startsWith('admin_owner_buy:'))return false;
     if(!staff.isOwner(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak. Saldo dan pembelian langsung provider hanya untuk owner toko.'});return true;}
     await i.deferReply({ephemeral:true});
     try{
