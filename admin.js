@@ -1,3 +1,4 @@
+const {lifetimeText}=require('./railway-lifetime');
 const {storageText}=require('./storage-health');
 const {ownerOnly,privateMenu}=require('./owner-privacy');
 const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
@@ -185,7 +186,7 @@ function createAdminHandler({discord, db, smscode,pricing,staff,resolveUser,meas
         if(!isDiscordAdmin(i.user.id))throw Error('Akses admin sudah dicabut.');
         const ms=n=>Number.isFinite(n)&&n>=0?n.toFixed(1)+' ms':'Belum tersedia';
         const ping=metrics.discord,quality=!Number.isFinite(ping)||ping<0?'Menunggu koneksi':ping<150?'Cepat':ping<300?'Cukup responsif':'Latensi tinggi';
-        await i.editReply({content:`**📡 Ping & Kecepatan Bot**\nKoneksi Discord: **${ms(ping)}** • ${quality}\nProses hingga respons awal: **${ms(Date.now()-started)}**\nAkses database: **${ms(metrics.database)}**\nRAM proses: **${Number.isFinite(metrics.ram)?metrics.ram.toFixed(1)+' MB':'Belum tersedia'}**\nWaktu berjalan: **${Math.floor(process.uptime()/60)} menit**${storageText(metrics.storage)}\n\nLatensi lebih rendah berarti respons lebih cepat. Nilai koneksi berasal dari heartbeat Discord.`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_bot_ping').setLabel('Tes Ulang').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_data').setLabel('Kembali').setStyle(ButtonStyle.Primary))]});return true;
+        await i.editReply({content:`**📡 Ping & Kecepatan Bot**\nKoneksi Discord: **${ms(ping)}** • ${quality}\nProses hingga respons awal: **${ms(Date.now()-started)}**\nAkses database: **${ms(metrics.database)}**\nRAM proses: **${Number.isFinite(metrics.ram)?metrics.ram.toFixed(1)+' MB':'Belum tersedia'}**\nWaktu berjalan: **${Math.floor(process.uptime()/60)} menit**${storageText(metrics.storage)}${lifetimeText(metrics.railway||{expires:null})}\n\nLatensi lebih rendah berarti respons lebih cepat. Nilai koneksi berasal dari heartbeat Discord.`,allowedMentions:{parse:[]},components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_bot_ping').setLabel('Tes Ulang').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('admin_system_data').setLabel('Kembali').setStyle(ButtonStyle.Primary),...(isOwner(i.user.id)?[new ButtonBuilder().setCustomId('admin_railway_menu').setLabel('Masa Aktif Railway').setStyle(ButtonStyle.Secondary)]:[]))]});return true;
       }
       if(i.customId.startsWith('admin_balances:')) {
         await i.update(await buyerBalances(Number(i.customId.split(':')[1]),i.customId.split(':')[2]||'all'));return true;

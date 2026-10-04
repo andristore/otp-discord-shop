@@ -1,7 +1,7 @@
 // One policy for visible buttons and direct/old interaction submissions.
 function ownerOnly(id) {
   id=String(id||'');
-  return /^(provider_|admin_owner_|admin_upgrade_|admin_df_|admin_smscode_webhook|admin_ops_low|admin_store_maintenance|admin_tools_(backup|report|csv|fee|audit)|admin_healthcheck_(midtrans|invoice|callbacks|errors|alerts|refund))/.test(id)
+  return /^(provider_|admin_railway_|admin_owner_|admin_upgrade_|admin_df_|admin_smscode_webhook|admin_ops_low|admin_store_maintenance|admin_tools_(backup|report|csv|fee|audit)|admin_healthcheck_(midtrans|invoice|callbacks|errors|alerts|refund))/.test(id)
     || ['admin_digiflazz','admin_health','admin_test_otp','admin_system_provider','admin_catalog_provider','admin_reports_menu','admin_healthcheck','admin_healthcheck_dm','admin_ops_manual','admin_ops_manual_save','admin_store_maintenance'].includes(id);
 }
 function privateMenu(payload,isOwner,canAccess=()=>true) {

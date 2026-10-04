@@ -1,5 +1,6 @@
 const {createOTPLifecycle,createOTPLifecycleHandler}=require('./otp-lifecycle');
 const {createStorageHealth}=require('./storage-health');
+const {createRailwayLifetime,createRailwayHandler}=require('./railway-lifetime');
 const {createShopUpgrades,createShopUpgradesHandler,createBuyerGameCheckHandler}=require('./shop-upgrades');
 const {protectOwnerInteraction}=require('./owner-privacy');
 require("dotenv").config();
@@ -284,6 +285,7 @@ app.post("/api/discord/balance",admin, (req,res)=>{
 const client = new Client({intents:[GatewayIntentBits.Guilds]});
 const sendDiscordDM=async(id,content)=>{if(!client.isReady())throw new Error('Discord belum siap');const user=await client.users.fetch(id);await user.send({content,allowedMentions:{parse:[]}});};
 const staff=createStaff({db});upgrades=createShopUpgrades({db,staff,sendDM:sendDiscordDM,resolveUser:id=>client.users.fetch(id)});staff.canRoute=(user,id)=>upgrades.canRoute(user,id);configureAdminAccess(staff);commerce.setOwnerAccess(id=>staff.isOwner(id));
+const railwayLifetime=createRailwayLifetime({db,staff,sendDM:sendDiscordDM});
 const languages=createLanguages({db,staff});
 storeFeatures=createStoreFeatures({db,staff,sendDM:sendDiscordDM,resolveInfoChannel:async id=>{const c=await client.channels.fetch(id);if(!c)return null;const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);return {id:c.id,guildId:c.guildId,type:c.type,canInfo:!!p&&p.has(bits.ViewChannel)&&p.has(bits.SendMessages),send:payload=>c.send(payload)};}});
 manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:sendDiscordDM,maintenance:()=>storeFeatures.maintenance(),checkPurchase,audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
@@ -367,8 +369,10 @@ async function startDiscord(){
   commerce.setCoupons(toolkit.coupons);
   const handleTools=createShopToolsHandler({discord:require("discord.js"),tools:toolkit,staff,commerce});
   const handleEfficiency=createEfficiencyHandler({discord:require("discord.js"),model:efficiency,commerce,payments,features:storeFeatures,staff,smscode,operations,otpPanel:handleOTPLifecycle.panel});
+  const handleRailway=createRailwayHandler({discord:require("discord.js"),staff,model:railwayLifetime});
+  const railwayPoll=setInterval(()=>railwayLifetime.poll().catch(console.error),60000);railwayPoll.unref();railwayLifetime.poll().catch(console.error);
   const measureStorage=createStorageHealth({databasePath,backupDir:process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(databasePath)),"backups"),volumePath:process.env.RAILWAY_VOLUME_MOUNT_PATH,appDir:__dirname});
-  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:async()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024,storage:await measureStorage()};},audit:toolkit.audit});
+  const handleAdmin=createAdminHandler({discord:require("discord.js"),db,smscode,pricing,staff,resolveUser:id=>client.users.fetch(id),measureHealth:async()=>{const started=process.hrtime.bigint();db.prepare("SELECT 1").get();return {discord:client.ws.ping,database:Number(process.hrtime.bigint()-started)/1000000,ram:process.memoryUsage().rss/1024/1024,storage:await measureStorage(),railway:railwayLifetime.settings()};},audit:toolkit.audit});
   const premiumProducts=createPremiumProducts({db,staff,language:id=>languages.get(id),products:manualProducts,sendDM:async(id,payload)=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload,homeForUser(staff,id)),id,'delivery'));}});
   const handlePremiumProducts=createPremiumProductsHandler({discord:require("discord.js"),language:id=>languages.get(id),model:premiumProducts,products:manualProducts,staff});
   const handleManualProducts=createManualProductsHandler({discord:require("discord.js"),model:manualProducts,staff,premium:premiumProducts,language:id=>languages.get(id),sendDM:async(id,payload,order)=>{const send=async()=>{const user=await client.users.fetch(id);await user.send(languages.translate(withHome(payload,homeForUser(staff,id)),id,'delivery'));};if(order)await improvements.send("digital",order.id,id,send);else await send();}});
@@ -425,6 +429,7 @@ async function startDiscord(){
       if(await dispatchInteraction(handleOperations,i)) return;
       if(await dispatchInteraction(handleManualProducts,i)) return;
       if(await dispatchInteraction(handleBuyerManagement,i))return;
+      if(await dispatchInteraction(handleRailway,i))return;
       if(await dispatchInteraction(handleAdmin,i)) return;
       if(await dispatchInteraction(handleProviderFlow,i)) return;
       if(await dispatchInteraction(handlePayment,i)) return;
