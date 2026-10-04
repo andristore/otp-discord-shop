@@ -156,7 +156,7 @@ function createManualProducts({diagnostics,db,staff,audit=()=>{},maintenance=()=
     try{await notifier(o);db.prepare('UPDATE manual_product_orders SET notified=1 WHERE id=?').run(o.id);}catch{diagnostics?.record('product_dm','FAILED',o.id);console.warn('Pengiriman DM produk belum berhasil; pesanan',o.id,'akan dicoba ulang.');}finally{notifying.delete(o.id);}}
   const settle=db.transaction(payment=>{const o=db.prepare('SELECT * FROM manual_product_orders WHERE invoice_id=?').get(payment.order_id),p=payments?.get(payment.order_id,payment.discord_id);
     if(!o || !p?.credited || p.purpose!=='purchase' || p.discord_id!==o.discord_id || p.amount!==o.amount || o.payment_method!=='qris')throw Error('Pembayaran produk belum terverifikasi.');
-    if(o.state==='awaiting_payment'&&['refund','partial_refund'].includes(p.provider_status))throw Error('Refund gateway terdeteksi. Hubungi admin untuk pencocokan pembayaran; pengiriman belum diproses.');
+    if(o.state==='awaiting_payment'&&['refund','partial_refund','REFUNDED'].includes(p.provider_status))throw Error('Refund gateway terdeteksi. Hubungi admin untuk pencocokan pembayaran; pengiriman belum diproses.');
     if(o.state==='awaiting_payment'){db.prepare("UPDATE manual_product_orders SET state='pending',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(o.id);deliverStock(o);}return getOrder(o.discord_id,o.id);
   });
   async function fulfillPayment(payment){const o=settle(payment);await notify(o);return o;}
@@ -241,7 +241,11 @@ function createManualProductsHandler({discord,model,staff,sendDM=async()=>{},pre
 
   function paymentView(o,p){if(o.state!=='awaiting_payment')return order(o,false);const response=order(o,false),user=o.discord_id;
     response.content+='\n'+t(user,'Tagihan: ','Invoice: ')+o.invoice_id+'\n'+t(user,'Status pembayaran: ','Payment status: ')+(p?.status||t(user,'belum terkonfirmasi','unconfirmed'))+'\n'+t(user,'Jangan membuat pembayaran ulang.','Do not create another payment.');
-    if(p?.qr_url)response.embeds=[embed(t(user,'QRIS Produk Lainnya','Digital Product QRIS'),`${t(user,'Harga produk: ','Product price: ')}${money(o.amount)}\n${t(user,'Biaya pembeli: ','Customer fee: ')}${money(p.fee_customer||0)}\n${t(user,'Total bayar: ','Payment total: ')}**${money(p.total_charge||o.amount)}**\n${p.production?t(user,'Pindai QRIS untuk membayar.','Scan QRIS to pay.'):t(user,'MODE UJI — gunakan simulator ','TEST MODE — use the simulator ')+(p.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}\n${o.automatic?t(user,'Data dikirim otomatis setelah pembayaran lunas.','Data is delivered automatically after full payment.'):t(user,'Produk ini diproses admin setelah pembayaran lunas.','An admin processes this product after full payment.')}`).setImage(p.qr_url)];return response;}
+    if(p?.qr_url)response.embeds=[embed(t(user,'QRIS Produk Lainnya','Digital Product QRIS'),`${t(user,'Harga produk: ','Product price: ')}${money(o.amount)}\n${t(user,'Biaya pembeli: ','Customer fee: ')}${money(p.fee_customer||0)}\n${t(user,'Total bayar: ','Payment total: ')}**${money(p.total_charge||o.amount)}**\n${p.production?t(user,'Pindai QRIS untuk membayar.','Scan QRIS to pay.'):t(user,'MODE UJI — gunakan simulator ','TEST MODE — use the simulator ')+(p.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}\n${o.automatic?t(user,'Data dikirim otomatis setelah pembayaran lunas.','Data is delivered automatically after full payment.'):t(user,'Produk ini diproses admin setelah pembayaran lunas.','An admin processes this product after full payment.')}`).setImage(p.qr_url)];
+    if(p?.checkout_url&&p.status==='pending'){
+      response.embeds=[embed('QRIS Produk Lainnya',`Total: **${money(p.total_charge||o.amount)}**\n${require('./doku').paymentInstruction(p,language(user)==='en')}`)];
+      response.components.push(row(require('./doku').paymentButton(p,discord)));
+    }return response;}
   model.setNotifier(o=>sendDM(o.discord_id,order({...o,notified:1},false),o));
   async function notify(o){await model.notify(o);return !!model.getOrder(o.discord_id,o.id).notified;}
   return async function handle(i) {

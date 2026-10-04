@@ -35,7 +35,7 @@ function createEfficiency({db,staff}){
     return {
       manual:db.prepare("SELECT COUNT(*) n FROM manual_topup_requests WHERE status='pending'").get().n,
       review:db.prepare("SELECT COUNT(*) n FROM direct_purchases WHERE state IN ('review','resolving')").get().n,
-      invoices:db.prepare("SELECT COUNT(*) n FROM topups WHERE gateway IN ('tripay','midtrans') AND credited=0 AND status IN ('creating','pending')").get().n,
+      invoices:db.prepare("SELECT COUNT(*) n FROM topups WHERE gateway IN ('tripay','midtrans','doku') AND credited=0 AND status IN ('creating','pending')").get().n,
       processing:digital?db.prepare("SELECT COUNT(*) n FROM manual_product_orders WHERE state='pending'").get().n:0,
       delivery:digital?db.prepare("SELECT COUNT(*) n FROM manual_product_orders WHERE state='completed' AND notified=0").get().n:0,
       lowStock:stock?db.prepare("SELECT COUNT(*) n FROM manual_products p WHERE p.deleted=0 AND p.enabled=1 AND ((p.quantity IS NOT NULL AND p.quantity<=3) OR (p.auto_enabled=1 AND (SELECT COUNT(*) FROM manual_product_stock s WHERE s.product_id=p.id AND s.state='available')<=3))").get().n:0
@@ -86,7 +86,9 @@ function createEfficiencyHandler({discord,model,commerce,payments,features,staff
         const p=payments.active(user);
         if(!p){await i.editReply({content:'Tidak ada tagihan QRIS aktif.',components:[row([['shop_topup','Isi Saldo']])]});return true;}
         const e=new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Tagihan QRIS Aktif').setDescription(`Jenis: ${p.order_id.startsWith('manual-buy-')?'Produk Lainnya':p.purpose==='purchase'?'Pembelian OTP':'Isi saldo'}\nNominal: ${money(p.amount)}\nTotal: ${p.total_charge==null?'Belum diterima':money(p.total_charge)}\nStatus: ${p.status}\n${p.production?'':'MODE UJI — gunakan simulator pembayaran.\n'}Gunakan tagihan ini; jangan membayar ulang.${p.provider_ref?'':'\nReferensi belum diterima. Minta admin memeriksa ID tagihan di dashboard gateway pembayaran.'}`).setFooter({text:p.order_id});if(p.qr_url)e.setImage(p.qr_url);
-        await i.editReply({embeds:[e],components:[row([[(p.order_id.startsWith('manual-buy-')?'manual_invoice_check:':p.purpose==='purchase'?'direct_check:':'topup_check:')+p.order_id,'Cek Pembayaran'],['shop_topup','Kembali']])]});
+        const pay=require('./doku').paymentButton(p,discord);if(pay)e.setDescription(e.data.description+'\n'+require('./doku').paymentInstruction(p));
+        const check=row([[(p.order_id.startsWith('manual-buy-')?'manual_invoice_check:':p.purpose==='purchase'?'direct_check:':'topup_check:')+p.order_id,'Cek Pembayaran'],['shop_topup','Kembali']]);if(pay)check.addComponents(pay);
+        await i.editReply({embeds:[e],components:[check]});
       }else if(id==='admin_eff_summary'){
         const r=model.summary(user);let provider='Hanya owner';if(staff.isOwner?.(user))try{const v=(await smscode('/balance')).data?.balance,b=Number(v && typeof v==='object'?v.canonical_amount:v);if(v!=null && Number.isSafeInteger(b) && b>=0)provider=money(b)+(b<operations.settings().lowThreshold?' ⚠️ di bawah batas peringatan':'');}catch{}
         if(!staff.isAdmin(user))throw new Error('Akses admin sudah dicabut.');
