@@ -36,6 +36,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
   db.exec(`CREATE TABLE IF NOT EXISTS topups(order_id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'creating',qr_url TEXT,credited INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
   const columns=new Set(db.prepare('PRAGMA table_info(topups)').all().map(c=>c.name));
   for(const [name,type] of Object.entries({purpose:"TEXT NOT NULL DEFAULT 'topup'",gateway:"TEXT NOT NULL DEFAULT 'midtrans'",checkout_url:'TEXT',provider_ref:'TEXT',channel:'TEXT',total_charge:'INTEGER',fee_customer:'INTEGER',fee_merchant:'INTEGER',production:'INTEGER',paid_at:'TEXT',expires_ms:'INTEGER',provider_status:'TEXT',external_refund_amount:'INTEGER',status_checked_ms:'INTEGER',verified_callback_ms:'INTEGER'}))if(!columns.has(name))db.exec(`ALTER TABLE topups ADD COLUMN ${name} ${type}`);
+  const control=require('./qris-control').createQrisControl({db,env});
   async function request(path,body,live=production) {
     try{
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
@@ -82,8 +83,9 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
   function assertCanCreate(userId){const p=active(userId);if(p){const e=new Error('Masih ada tagihan QRIS aktif. Buka Tagihan Aktif untuk melanjutkan pembayaran; jangan membayar ulang.');e.code='ACTIVE_INVOICE';throw e;}}
   const reserve=db.transaction((orderId,userId,amount,purpose,expiry)=>{assertCanCreate(userId);db.prepare("INSERT INTO topups(order_id,discord_id,amount,purpose,gateway,channel,production,expires_ms) VALUES(?,?,?,?,'tripay',?,?,?)").run(orderId,userId,amount,purpose,channel,production?1:0,expiry);});
   const midtrans=require('./midtrans').createMidtrans({db,fetchImpl,env,onSettled,assertCanCreate,diagnostics});
-  const doku=require('./doku').createDoku({db,fetchImpl,env,onSettled,assertCanCreate,diagnostics});
+  const doku=require('./doku').createDoku({db,fetchImpl,env,onSettled,assertCanCreate,diagnostics,record:control.record});
   async function create(userId,amount,options={}) {
+    if(!control.enabled())throw Error('QRIS sedang dinonaktifkan sementara. Tagihan lama tetap dapat diperiksa.');
     if(gateway==='midtrans')return midtrans.create(userId,amount,options);
     if(gateway==='doku')return doku.create(userId,amount,options);
     if(!configured)throw new Error('QRIS TriPay belum dikonfigurasi oleh admin.');
@@ -112,7 +114,7 @@ function createPayments({diagnostics,db,fetchImpl=fetch,env=process.env,onSettle
       catch {res.status(502).json({success:false,message:'Konfirmasi TriPay belum tersedia; ulangi callback'});}
     });
   }
-  return {create,refresh,mount,gateway,midtransHealth:midtrans.health,inspectMidtrans:midtrans.inspect,configured:gateway==='doku'?doku.configured:gateway==='midtrans'?midtrans.configured:configured,production:gateway==='doku'?doku.production:gateway==='midtrans'?midtrans.production:production,canPoll:configured || midtrans.configured || doku.configured,active,assertCanCreate,
+  return {create,refresh,mount,gateway,control,available:()=>control.enabled()&&(gateway==='doku'?doku.configured:gateway==='midtrans'?midtrans.configured:configured),midtransHealth:midtrans.health,inspectMidtrans:midtrans.inspect,configured:gateway==='doku'?doku.configured:gateway==='midtrans'?midtrans.configured:configured,production:gateway==='doku'?doku.production:gateway==='midtrans'?midtrans.production:production,canPoll:configured || midtrans.configured || doku.configured,active,assertCanCreate,
     get:(id,userId)=>db.prepare('SELECT * FROM topups WHERE order_id=? AND discord_id=?').get(id,userId),
     recent:userId=>db.prepare("SELECT * FROM topups WHERE discord_id=? AND purpose='topup' ORDER BY created_at DESC,rowid DESC LIMIT 5").all(userId)};
 }
@@ -126,7 +128,7 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
     if(id==='shop_topup') {
       await i.reply({ephemeral:true,embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Isi Saldo • Hi, Belanja Produk Digital Yukk')
         .setDescription('Minimal isi saldo **5.000 IDR**.\n\n**QRIS Otomatis** — saldo masuk setelah pembayaran terverifikasi.\n**Manual** — hubungi admin dan kirim bukti pembayaran; saldo ditambahkan setelah diperiksa.')],components:[new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('topup_qris').setLabel('QRIS Otomatis').setStyle(ButtonStyle.Primary).setDisabled(!payments.configured),
+          new ButtonBuilder().setCustomId('topup_qris').setLabel('QRIS Otomatis').setStyle(ButtonStyle.Primary).setDisabled(!(payments.available?payments.available():payments.configured)),
           new ButtonBuilder().setCustomId('topup_manual').setLabel('Manual').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});return true;
     }
@@ -144,6 +146,7 @@ function createPaymentHandler({discord,payments,env=process.env,manualInstructio
     if(!payments.configured && !id.startsWith('topup_check:') && id!=='topup_history') {await i.reply({ephemeral:true,content:'QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran. Anda tetap bisa memakai Isi Saldo → Manual.'});return true;}
     if(id==='topup_qris' && payments.active?.(i.user.id)){await i.reply({ephemeral:true,content:'Masih ada tagihan QRIS aktif. Lanjutkan tagihan sebelumnya.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Buka Tagihan Aktif').setStyle(ButtonStyle.Primary))]});return true;}
     if(id==='topup_qris') {
+      if(payments.available&&!payments.available()){await i.reply({ephemeral:true,content:t(i.user.id,'QRIS belum tersedia untuk tagihan baru. Tagihan lama tetap dapat diperiksa.','QRIS is unavailable for new invoices. Existing invoices can still be checked.')});return true;}
       await i.showModal(new ModalBuilder().setCustomId('topup_amount').setTitle('Isi Saldo QRIS')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount')
           .setLabel('Nominal IDR (5.000–1.000.000)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7)),

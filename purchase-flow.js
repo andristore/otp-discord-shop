@@ -61,7 +61,7 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
     if(stage==='product' && state.operator && state.operator!=='any')filters.operator_id=state.operator;
     const [countries,result,operators]=await Promise.all([
       stage==='country'?list('/catalog/countries'):Promise.resolve([]),
-      smsCatalogProducts(filters),
+      smsCatalogProducts(filters, {fresh:adminView && stage==='product'}),
       ['operator','product'].includes(stage)?list(`/catalog/operators?country_id=${encodeURIComponent(state.country)}&platform_id=${encodeURIComponent(state.app)}`):Promise.resolve([])
     ]);
     return {services:[],countries,products:pricing?result.data.map(p=>({...p,providerPrice:Number(p.price?.canonical_amount ?? p.price),price:pricing.price(p.price?.canonical_amount ?? p.price)})):result.data,operators};
@@ -114,9 +114,13 @@ function createPurchaseFlow({discord,smscode,smsCatalogProducts,pricing,adminVie
       await i.deferReply({ephemeral:true});
       const [,pid,app,country,operator]=originalId.split(':');
       const data=await catalog('product',{app,country,operator});const p=data.products.find(p=>String(p.id)===pid && (p.operator_id==null?'any':String(p.operator_id))===(operator || 'any'));
-      if(!p){await i.editReply({content:'Produk tidak tersedia lagi.'});return true;}
+      if(!p){await i.editReply({content:'Produk sudah tidak ada di katalog terbaru. Pilih produk lain.',components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('provider_catalog').setLabel('Pilih Produk Lain').setStyle(ButtonStyle.Primary))]});return true;}
+      const canBuy=Boolean(p.active)&&Number(p.available)>0;
+      const actions=[new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual Semua Layanan').setStyle(ButtonStyle.Primary)];
+      if(isOwner(i.user.id))actions.push(new ButtonBuilder().setCustomId(`admin_owner_quote:${pid}:${app}:${country}:${operator || 'any'}`).setLabel(canBuy?'Beli Pakai Saldo Provider (Owner)':'Tidak Tersedia untuk Dibeli').setStyle(ButtonStyle.Success).setDisabled(!canBuy));
+      actions.push(new ButtonBuilder().setCustomId('provider_catalog').setLabel('Pilih Produk Lain').setStyle(ButtonStyle.Secondary));
       await i.editReply({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle(`Katalog Provider • ${String(p.name || p.id).slice(0,180)}`)
-        .setDescription(`Harga dasar: **${p.providerPrice.toLocaleString('id-ID')} IDR**\nHarga jual: **${p.price.toLocaleString('id-ID')} IDR**\nSelisih: **${(p.price-p.providerPrice).toLocaleString('id-ID')} IDR**\nStok: **${p.available || 0}**\nStatus: **${p.active?'Aktif':'Nonaktif'}**`)],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_pricing').setLabel('Atur Harga Jual Semua Layanan').setStyle(ButtonStyle.Primary),...(isOwner(i.user.id)?[new ButtonBuilder().setCustomId(`admin_owner_quote:${pid}:${app}:${country}:${operator || 'any'}`).setLabel('Beli Pakai Saldo Provider (Owner)').setStyle(ButtonStyle.Success)]:[]))]});return true;
+        .setDescription(`Harga dasar: **${p.providerPrice.toLocaleString('id-ID')} IDR**\nHarga jual: **${p.price.toLocaleString('id-ID')} IDR**\nSelisih: **${(p.price-p.providerPrice).toLocaleString('id-ID')} IDR**\nStok: **${p.available || 0}**\nStatus: **${p.active?'Aktif':'Nonaktif'}**`)],components:[new ActionRowBuilder().addComponents(...actions)]});return true;
     }
     if(!adminView && originalId.startsWith('favorite_open:')){
       await i.deferReply({ephemeral:true});

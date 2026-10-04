@@ -106,6 +106,7 @@ app.use(session({
 }));
 // Cover every authenticated dashboard mutation, including order and balance endpoints.
 app.use("/api",webSecurity.originGuard);
+require("./public-store").mountPublicStore(app);
 app.use(express.static("public"));
 
 function admin(req,res,next){
@@ -138,12 +139,13 @@ const CATALOG_CACHE_MS = 60_000;
 const catalogCache = new Map();
 const catalogLoading = new Map();
 
-async function smsCatalogProducts(filters={}){
+async function smsCatalogProducts(filters={}, {fresh=false}={}){
   const query=['platform_id','country_id','operator_id'].filter(key=>filters[key]!=null)
     .map(key=>`${key}=${encodeURIComponent(filters[key])}`).join('&');
   const cached=catalogCache.get(query);
-  if(cached && Date.now() < cached.expiresAt) return cached.result;
-  if(catalogLoading.has(query)) return catalogLoading.get(query);
+  if(!fresh && cached && Date.now() < cached.expiresAt) return cached.result;
+  const loadingKey=fresh?query+'|fresh':query;
+  if(catalogLoading.has(loadingKey)) return catalogLoading.get(loadingKey);
   const loading = (async()=>{
     const products = new Map();
     const limit = 1000;
@@ -166,9 +168,9 @@ async function smsCatalogProducts(filters={}){
     catalogCache.set(query,{result, expiresAt: Date.now() + CATALOG_CACHE_MS});
     return result;
   })();
-  catalogLoading.set(query,loading);
+  catalogLoading.set(loadingKey,loading);
   try { return await loading; }
-  finally { catalogLoading.delete(query); }
+  finally { catalogLoading.delete(loadingKey); }
 }
 
 function catalogPage(products, requestedPage=0){
@@ -361,6 +363,8 @@ async function startDiscord(){
   const handleUpgrades=createShopUpgradesHandler({discord:require("discord.js"),model:upgrades,staff,tools:toolkit,digiflazz,smscode,efficiency});
   const upgradeAlertsPoll=setInterval(()=>upgrades.pollAlerts().catch(console.error),60000);upgradeAlertsPoll.unref();upgrades.pollAlerts().catch(console.error);
   const handleHealth=createHealthHandler({discord:require("discord.js"),model:shopHealth,staff});
+  const handleQrisControl=require('./qris-control').createQrisControlHandler({discord:require('discord.js'),payments,staff});
+  const qrisAlertPoll=setInterval(()=>payments.control.pollAlerts(payments,staff,sendDiscordDM).catch(()=>console.error('Peringatan QRIS belum terkirim.')),60000);qrisAlertPoll.unref();
   const buyerManagement=createBuyerManagement({db,staff});
   const handleBuyerManagement=createBuyerManagementHandler({discord:require("discord.js"),model:buyerManagement,staff});
   const buyerArchivePoll=setInterval(()=>{try{buyerManagement.sweep();}catch(e){console.error(e);}},3600000);buyerArchivePoll.unref();buyerManagement.sweep();
@@ -410,6 +414,7 @@ async function startDiscord(){
       if(await dispatchInteraction(handleBuyerGameCheck,i))return;
       if(await dispatchInteraction(handleUpgrades,i))return;
       if(i.customId==='admin_balance_save'&&!staff.isOwner(i.user.id)&&upgrades.settings().approvalThreshold>0&&Number(i.fields.getTextInputValue('amount'))>=upgrades.settings().approvalThreshold){await i.deferReply({ephemeral:true});const p=await upgrades.requestCredit(i);await i.editReply({content:'Pengajuan '+p.id+' menunggu owner di Dashboard Owner → Pengajuan Saldo. Saldo belum ditambahkan.',allowedMentions:{parse:[]}});return;}
+      if(await dispatchInteraction(handleQrisControl,i))return;
       if(await dispatchInteraction(handleHealth,i))return;
       if(await dispatchInteraction(handleOrderChannel,i))return;
       if(await dispatchInteraction(handleImprovements,i))return;

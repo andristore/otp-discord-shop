@@ -24,7 +24,16 @@ function validateStatus(p,s){
     throw Error('Data pembayaran tidak sesuai tagihan QRIS.');
   return state==='SUCCESS';
 }
-function createDoku({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{},assertCanCreate,diagnostics,now=Date.now}){
+function providerExpiry(value){
+  if(value==null)return null;
+  if(typeof value!=='string'||!/^\d{14}$/.test(value))throw Error('Batas waktu pembayaran tidak valid. Jangan membuat tagihan pengganti.');
+  // Compact Checkout timestamps use WIB, as shown by the provider's response examples.
+  const iso=value.slice(0,4)+'-'+value.slice(4,6)+'-'+value.slice(6,8)+'T'+value.slice(8,10)+':'+value.slice(10,12)+':'+value.slice(12,14);
+  const ms=Date.parse(iso+'+07:00');
+  if(!Number.isFinite(ms)||new Date(ms+7*3600000).toISOString().slice(0,19)!==iso)throw Error('Batas waktu pembayaran tidak valid. Jangan membuat tagihan pengganti.');
+  return ms;
+}
+function createDoku({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{},assertCanCreate,diagnostics,record=()=>{},now=Date.now}){
   const clientId=String(env.DOKU_CLIENT_ID||'').trim(),key=String(env.DOKU_SECRET_KEY||'').trim(),production=env.DOKU_IS_PRODUCTION==='true';
   const configured=Boolean(clientId&&key),base=production?'https://api.doku.com':'https://api-sandbox.doku.com';
   const get=id=>db.prepare("SELECT * FROM topups WHERE order_id=? AND gateway='doku'").get(id);
@@ -32,8 +41,8 @@ function createDoku({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{},as
     if(!configured)throw Error('Konfigurasi pembayaran QRIS belum diisi oleh owner.');
     const raw=body===undefined?undefined:JSON.stringify(body),requestId=randomUUID(),timestamp=new Date(now()).toISOString().replace(/\.\d{3}Z$/,'Z');
     try{const res=await fetchImpl(base+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',Accept:'application/json','Client-Id':clientId,'Request-Id':requestId,'Request-Timestamp':timestamp,Signature:signature({clientId,requestId,timestamp,target:path,raw},key)},...(raw===undefined?{}:{body:raw}),signal:AbortSignal.timeout(15000)});
-      const result=await res.json();if(!res.ok){const e=Error('Layanan pembayaran belum dapat memproses permintaan. Periksa konfigurasi dan tagihan sebelum mencoba lagi.');e.creationRejected=body!==undefined&&[400,401,403,422].includes(res.status)&&!result?.response?.payment;throw e;}return result;
-    }catch(e){diagnostics?.record('payment','FAILED','doku');throw e;}
+      const result=await res.json();if(!res.ok){const e=Error('Layanan pembayaran belum dapat memproses permintaan. Periksa konfigurasi dan tagihan sebelum mencoba lagi.');e.creationRejected=body!==undefined&&[400,401,403,422].includes(res.status)&&!result?.response?.payment;throw e;}record('api_ok');return result;
+    }catch(e){record('api_failed');diagnostics?.record('payment','FAILED','doku');throw e;}
   }
   const apply=db.transaction(s=>{
     const p=get(s.order?.invoice_number);if(!p)throw Error('Tagihan QRIS tidak ditemukan.');const paid=validateStatus(p,s);
@@ -58,26 +67,30 @@ function createDoku({db,fetchImpl=fetch,env=process.env,onSettled=async()=>{},as
     const data=r?.response;
     if(!r?.message?.includes('SUCCESS')||data?.order?.invoice_number!==id||Number(data.order.amount)!==amount||(data.order.currency&&data.order.currency!=='IDR')||typeof data.payment?.token_id!=='string'||!data.payment.token_id)
       throw Error('Respons invoice belum sesuai. Buka Tagihan Aktif; jangan membayar ulang.');
-    const url=checkoutUrl(data.payment.url,production);
+    const url=checkoutUrl(data.payment.url,production),expiry=providerExpiry(data.payment.expired_date)??get(id).expires_ms;
     // A callback can arrive before the creation response. Preserve a settled row.
-    db.prepare("UPDATE topups SET provider_ref=?,checkout_url=?,status=CASE WHEN status='creating' THEN 'pending' ELSE status END WHERE order_id=?").run(data.payment.token_id,url,id);return get(id);
+    db.prepare("UPDATE topups SET provider_ref=?,checkout_url=?,expires_ms=?,status=CASE WHEN status='creating' THEN 'pending' ELSE status END WHERE order_id=?").run(data.payment.token_id,url,expiry,id);return get(id);
   }
   async function refresh(id,user){const p=accessible(id,user);
     if(p.credited){if(p.purpose==='purchase'&&p.provider_status==='SUCCESS')await onSettled(p);return p;}
     // DOKU requires a delay before inquiry. Signed callbacks remain immediate.
     if(now()-Date.parse(p.created_at+'Z')<60000||now()-Number(p.status_checked_ms||0)<60000)return p;
     db.prepare('UPDATE topups SET status_checked_ms=? WHERE order_id=?').run(now(),id);
-    const result=await request('/orders/v1/status/'+encodeURIComponent(id));return finish(result);
+    const result=await request('/orders/v1/status/'+encodeURIComponent(id));try{return await finish(result);}catch(e){record('api_failed');throw e;}
   }
   function mount(app){app.post(CALLBACK,async(req,res)=>{
     if(!configured)return res.status(503).json({success:false});
     if(!verifyCallback(req,clientId,key))return res.status(403).json({success:false});
-    try{const invoice=accessible(req.body?.order?.invoice_number);validateStatus(invoice,req.body);}catch{return res.status(400).json({success:false,message:'Invoice atau nominal tidak sesuai.'});}
-    try{const p=await finish(req.body);db.prepare('UPDATE topups SET verified_callback_ms=? WHERE order_id=?').run(now(),p.order_id);return res.json({success:true});}
-    catch{diagnostics?.record('webhook','FAILED','doku');return res.status(502).json({success:false,message:'Notifikasi belum dapat diproses; ulangi atau periksa invoice.'});}
+    try{const invoice=accessible(req.body?.order?.invoice_number);validateStatus(invoice,req.body);}catch{record('callback_failed');return res.status(400).json({success:false,message:'Invoice atau nominal tidak sesuai.'});}
+    try{const p=await finish(req.body);db.prepare('UPDATE topups SET verified_callback_ms=? WHERE order_id=?').run(now(),p.order_id);record('callback_ok');return res.json({success:true});}
+    catch{record('callback_failed');diagnostics?.record('webhook','FAILED','doku');return res.status(502).json({success:false,message:'Notifikasi belum dapat diproses; ulangi atau periksa invoice.'});}
   });}
   return {configured,production,create,refresh,mount};
 }
-function paymentButton(p,discord){return p?.checkout_url?new discord.ButtonBuilder().setLabel('Bayar QRIS').setStyle(discord.ButtonStyle.Link??5).setURL(p.checkout_url):null;}
-function paymentInstruction(p,en=false){return p.gateway==='doku'?(p.production?(en?'Open Pay QRIS to display your QRIS.':'Tekan Bayar QRIS untuk menampilkan QRIS.'):(en?'TEST MODE — test payment only.':'MODE UJI — hanya pembayaran uji.')):(p.production?(en?'Scan QRIS to pay.':'Pindai QRIS untuk membayar.'):(en?'TEST MODE — use the payment simulator.':'MODE UJI — gunakan simulator pembayaran.'));}
-module.exports={signature,verifyCallback,checkoutUrl,validateStatus,createDoku,paymentButton,paymentInstruction,CALLBACK};
+function paymentButton(p,discord){if(!p?.checkout_url)return null;const b=new discord.ButtonBuilder().setLabel('Bayar QRIS').setStyle(discord.ButtonStyle.Link??5).setURL(p.checkout_url);if(p.credited||['expire','failure','refund'].includes(p.status)||(p.expires_ms&&p.expires_ms<=Date.now()))b.setDisabled(true);return b;}
+function paymentInstruction(p,en=false){
+  const deadline=p.expires_ms?'\n'+(en?'Payment deadline: ':'Batas pembayaran: ')+'<t:'+Math.floor(p.expires_ms/1000)+':R>':'';
+  if(!p.credited&&p.expires_ms&&p.expires_ms<=Date.now())return (en?'Payment window has ended. Check payment status; do not pay again until verified.':'Waktu pembayaran sudah habis. Cek status pembayaran; jangan membayar ulang sebelum status dipastikan.')+deadline;
+  return (p.gateway==='doku'?(p.production?(en?'Open Pay QRIS to display your QRIS.':'Tekan Bayar QRIS untuk menampilkan QRIS.'):(en?'TEST MODE — test payment only.':'MODE UJI — hanya pembayaran uji.')):(p.production?(en?'Scan QRIS to pay.':'Pindai QRIS untuk membayar.'):(en?'TEST MODE — use the payment simulator.':'MODE UJI — gunakan simulator pembayaran.')))+deadline;
+}
+module.exports={signature,verifyCallback,checkoutUrl,validateStatus,createDoku,paymentButton,paymentInstruction,providerExpiry,CALLBACK};

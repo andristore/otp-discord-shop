@@ -15,9 +15,13 @@ function createOwnerProviderHandler({discord,staff,commerce,smscode,smsCatalogPr
       }else if(id.startsWith('admin_owner_quote:')){
         const [,pid,app,country,operator]=id.split(':');
         if(![pid,app,country].every(v=>/^\d+$/.test(v||''))||!(/^(any|\d+)$/.test(operator||'')))throw Error('Pilihan produk tidak valid.');
-        const r=await smsCatalogProducts({platform_id:app,country_id:country,...(operator==='any'?{}:{operator_id:operator})});
+        const r=await smsCatalogProducts({platform_id:app,country_id:country,...(operator==='any'?{}:{operator_id:operator})},{fresh:true});
         const p=r.data.find(p=>String(p.id)===pid&&String(p.platform_id)===app&&String(p.country_id)===country&&(p.operator_id==null?'any':String(p.operator_id))===operator);
-        if(!p||!p.active||Number(p.available)<=0)throw Error('Produk tidak tersedia. Pilih produk kembali.');
+        if(!p||!p.active||!(Number(p.available)>0)){
+          const reason=!p?'Produk ini sudah tidak ada di katalog terbaru.':!p.active?'Layanan ini sedang nonaktif.':'Stok nomor produk ini sedang kosong.';
+          await i.editReply({content:reason+' Pilih harga atau operator lain. Belum ada pembelian atau pemotongan saldo.',components:[row([['provider_catalog','Pilih Produk Lain'],['admin_health','Saldo Provider']])]});
+          return true;
+        }
         const q=commerce.ownerQuote(i.user.id,p);
         await i.editReply({content:`**Konfirmasi Pembelian Owner**\nProduk: ${p.name}\nBiaya saldo provider: **${money(q.providerAmount)}**\nSaldo pembeli tidak dipotong. Konfirmasi berlaku 5 menit.\nTekan konfirmasi untuk membeli nomor sungguhan.`,allowedMentions:{parse:[]},components:[row([['admin_owner_buy:'+q.token,'Konfirmasi — Bayar Saldo Provider'],['provider_catalog','Kembali']])]});
       }else if(id.startsWith('admin_owner_buy:')){
