@@ -84,7 +84,7 @@ function createImprovementsHandler({discord,model,products,operations,staff}){
   const row=(...b)=>new ActionRowBuilder().addComponents(...b);
   const back=()=>row(button('admin_system_access','Kembali'),button('admin_home','Menu Awal Admin'));
   const panel=()=>({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('🛍️ Hi, Belanja Produk Digital Yukk').setDescription('Selamat datang di Produk Digital by Maboyy\nWelcome to Digital Products by Maboyy\n\nTekan Mulai Belanja, pilih bahasa, lalu pilih produk.\nPress Start Shopping, choose your language, then choose a product.').setFooter({text:'est. 2020 — Bot Otomatis 24/7'})],components:[row(button('shop_start','Mulai Belanja / Start Shopping',3))],allowedMentions:{parse:[]}});
-  return async i=>{
+  const handler=async i=>{
     const id=String(i.customId||'');if(!/^admin_(?:shop_panel(?:_|$)|dm_failed:|dm_retry:)/.test(id))return false;
     if(!staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     await i.deferReply({ephemeral:true});
@@ -100,10 +100,12 @@ function createImprovementsHandler({discord,model,products,operations,staff}){
         if(!i.guildId)throw Error('Buka pengaturan Panel Toko dari server tujuan.');
         if(id==='admin_shop_panel_publish'){const message=await model.publish(i.user.id,i.guildId,i.channelId,panel());await i.editReply({content:'✅ Panel toko tersimpan / diperbarui.\nhttps://discord.com/channels/'+i.guildId+'/'+i.channelId+'/'+message,components:[back()]});}
         else if(id==='admin_shop_panel_remove_confirm')await i.editReply({content:'Hapus pesan panel toko pada server ini?',components:[row(button('admin_shop_panel_remove','Ya, Hapus Panel',4),button('admin_shop_panel','Batal'))]});
-        else {if(id==='admin_shop_panel_remove')await model.remove(i.user.id,i.guildId);const p=model.location(i.user.id,i.guildId);await i.editReply({content:'**Panel Toko Permanen**\nBuka channel toko yang diizinkan, lalu tekan Pasang / Perbarui. Satu panel per server. Pembeli bisa memilih bahasa dan berbelanja tanpa mengetik /shop.\n'+(p?'Panel: https://discord.com/channels/'+i.guildId+'/'+p.channel_id+'/'+p.message_id:'Belum ada panel.'),components:[row(button('admin_shop_panel_publish','Pasang / Perbarui Panel',3),...(p?[button('admin_shop_panel_remove_confirm','Hapus Panel',4)]:[])),back()]});}
+        else {if(id==='admin_shop_panel_remove')await model.remove(i.user.id,i.guildId);const p=model.location(i.user.id,i.guildId);await i.editReply({content:'**Panel Toko Permanen**\nTekan Pasang / Perbarui, pilih nama server lalu nama channel toko. Satu panel per server. Pembeli bisa memilih bahasa dan berbelanja tanpa mengetik /shop.\n'+(p?'Panel: https://discord.com/channels/'+i.guildId+'/'+p.channel_id+'/'+p.message_id:'Belum ada panel.'),components:[row(button('admin_shop_panel_publish','Pasang / Perbarui Panel',3),...(p?[button('admin_shop_panel_remove_confirm','Hapus Panel',4)]:[])),back()]});}
       }
     }catch(e){await i.editReply({content:[50001,50013].includes(Number(e.code))?'Bot perlu izin Lihat Channel, Kirim Pesan, dan Sematkan Tautan di channel toko.':String(e.message||'Gagal memproses menu.').slice(0,1700),components:[back()],allowedMentions:{parse:[]}});}
     return true;
   };
+  handler.panel=panel;
+  return handler;
 }
 module.exports={createShopImprovements,createImprovementsHandler,orderProgress,progressText};

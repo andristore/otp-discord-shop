@@ -111,10 +111,6 @@ function createServerAccessHandler({discord,access,resolveChannel,resolveRole}) 
       const g=access.get(id.split(':')[1]);if(!g){await i.reply({ephemeral:true,content:'Server tidak ditemukan.'});return true;}
       await i.showModal(new ModalBuilder().setCustomId('admin_ops_guild_role_save:'+g.guild_id).setTitle('Role Pengguna Bot').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role').setLabel('ID role khusus; 0 untuk semua anggota').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20).setValue(g.role_id||'0'))));return true;
     }
-    if(id.startsWith('admin_ops_guild_channel:')){
-      const g=access.get(id.split(':')[1]);if(!g){await i.reply({ephemeral:true,content:'Server tidak ditemukan.'});return true;}
-      await i.showModal(new ModalBuilder().setCustomId('admin_ops_guild_channel_save:'+g.guild_id).setTitle('Channel Transaksi Server').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel').setLabel('ID channel teks; 0 untuk semua channel').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20).setValue(g.channel_id||'0'))));return true;
-    }
     await i.deferReply({ephemeral:true});
     try {
       if(id==='admin_ops_server_menu'){

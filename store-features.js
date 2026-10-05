@@ -119,10 +119,6 @@ function createStoreFeatureHandler({discord,features,staff}){
     if(!admin && !id.startsWith('manual_request') && id!=='shop_refund_guide')return false;
     if(admin && !staff.isAdmin(i.user.id)){await i.reply({ephemeral:true,content:'Akses ditolak.'});return true;}
     try{
-      if(id==='admin_store_info_config'){
-        if(!staff.isOwner?.(i.user.id))throw Error('Hanya owner dapat mengatur channel informasi.');
-        await i.showModal(modal('admin_store_info_save','Atur Channel Informasi',[['guild','ID server tujuan',20],['channel','ID channel teks tujuan',20]]));return true;
-      }
       if(id==='admin_store_info_compose'){await i.showModal(modal('admin_store_info_preview','Buat Pengumuman',[['title','Judul pengumuman',100],['body','Isi pengumuman',1500]]));return true;}
       if(id==='manual_request'){
         await i.showModal(modal('manual_request_submit','Ajukan Isi Saldo Manual',[['amount','Nominal IDR (5.000–1.000.000)',7],['proof','Tautan gambar bukti di Discord (HTTPS)',1000],['note','Catatan pengirim / waktu pembayaran',200,false]]));return true;

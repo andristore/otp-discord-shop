@@ -108,6 +108,8 @@ app.use(session({
 app.use("/api",webSecurity.originGuard);
 require("./public-store").mountPublicStore(app);
 app.use(express.static("public"));
+// The repository keeps its dashboard at the root, outside public/.
+app.get('/',(req,res)=>res.sendFile(path.join(__dirname,'index.html')));
 
 function admin(req,res,next){
   if(webSecurity.enabled&&req.session.admin) return next();
@@ -181,10 +183,10 @@ function catalogPage(products, requestedPage=0){
 
 function productAvailable(p){ return Boolean(p.active) && Number(p.available)>0; }
 
-async function smsCreateOrder(productId){
+async function smsCreateOrder(productId,{idempotencyKey=uuidKey()}={}){
   const result=await smscode("/orders/create", {
     method:"POST",
-    headers:{"Idempotency-Key":uuidKey()},
+    headers:{"Idempotency-Key":idempotencyKey},
     body:JSON.stringify({product_id:Number(productId), quantity:1})
   });
   for(const order of result.data?.orders||[])otpLifecycle.observe(order);return result;
@@ -221,8 +223,8 @@ app.post("/api/admin/login",webSecurity.loginLimit,(req,res)=>{
 app.post("/api/admin/logout",admin,(req,res)=>req.session.destroy(()=>res.json({ok:true})));
 app.get("/api/admin/products",admin,(req,res)=>res.json(db.prepare("SELECT * FROM products ORDER BY id DESC").all()));
 app.post("/api/admin/products",admin,(req,res)=>{
-  const {name,country,service,price,enabled=true}=req.body;
-  if(!name||!country||!service||Number(price)<0) return res.status(400).json({error:"Data produk tidak valid"});
+  let product;try{product=require('./admin').parseDashboardProduct(req.body);}catch(e){return res.status(400).json({error:e.message});}
+  const {name,country,service,price,enabled}=product;
   const x=db.prepare("INSERT INTO products(name,country,service,price,enabled) VALUES(?,?,?,?,?)")
     .run(name,country,service,Number(price),enabled?1:0);
   res.json({id:x.lastInsertRowid});
@@ -230,9 +232,8 @@ app.post("/api/admin/products",admin,(req,res)=>{
 app.patch("/api/admin/products/:id",admin,(req,res)=>{
   const p=db.prepare("SELECT * FROM products WHERE id=?").get(req.params.id);
   if(!p) return res.status(404).json({error:"Produk tidak ditemukan"});
-  const name=req.body.name ?? p.name, country=req.body.country ?? p.country,
-        service=req.body.service ?? p.service, price=Number(req.body.price ?? p.price),
-        enabled=req.body.enabled===undefined?p.enabled:(req.body.enabled?1:0);
+  let product;try{product=require('./admin').parseDashboardProduct(req.body,p);}catch(e){return res.status(400).json({error:e.message});}
+  const {name,country,service,price,enabled}=product;
   db.prepare("UPDATE products SET name=?,country=?,service=?,price=?,enabled=? WHERE id=?")
     .run(name,country,service,price,enabled,p.id);
   res.json({ok:true});
@@ -262,11 +263,8 @@ app.get("/api/order/:id",admin, async(req,res)=>{
   const order=db.prepare("SELECT * FROM orders WHERE provider_order_id=?").get(req.params.id);
   if(!order) return res.status(404).json({error:"Order tidak ditemukan"});
   try {
-    const result=await smsOrder(req.params.id);
-    const d=result.data;
-    db.prepare("UPDATE orders SET otp=?,status=?,phone=? WHERE id=?")
-      .run(d.otp_code||null,d.status||"ACTIVE",d.phone_number||order.phone,order.id);
-    res.json({ok:true,status:d.status,otp:d.otp_code||null,phone:d.phone_number||order.phone,expiresAt:d.expires_at});
+    const state=await otpLifecycle.refresh(req.params.id,order.discord_id);
+    res.json({ok:true,status:state.order.status,otp:state.order.otp,phone:state.order.phone,expiresAt:new Date(state.expires).toISOString()});
   } catch(e){res.status(502).json({error:e.message});}
 });
 
@@ -294,6 +292,15 @@ manualProducts=createManualProducts({diagnostics,db,staff,payments,sendAdminDM:s
 const digiflazz=createDigiflazz({db,pricing,assertOpen:assertStoreOpen,checkPurchase,nicknameChecker:upgrades.nickname,needsNickname:upgrades.needsNickname,nicknameNeedsServer:upgrades.nicknameNeedsServer,observeCatalog:upgrades.observeCatalog,staff,sendDM:sendDiscordDM,audit:(id,action)=>{if(!staff.isAdmin(id))throw Error('Akses ditolak.');db.prepare('INSERT INTO shop_admin_audit(admin_id,action) VALUES(?,?)').run(id,action);}});
 digiflazz.mount(app);
 const serverAccess=createServerAccess({db,sendDM:sendDiscordDM,staff,isMember:async(guildId,userId)=>{const guild=client.guilds.cache.get(guildId);if(!guild)return false;const member=await guild.members.fetch({user:userId,force:true});return !!member;}});
+const releaseInfo=require('./release-info').createReleaseInfo({db,staff,release:require('./release.json'),resolveChannel:async id=>{
+  const c=await client.channels.fetch(id);if(!c||c.type!==0)return null;
+  const bits=require('discord.js').PermissionFlagsBits,p=c.permissionsFor(client.user);
+  return {type:c.type,approved:serverAccess.get(c.guildId)?.status==='approved',canSend:!!p&&[bits.ViewChannel,bits.SendMessages,bits.EmbedLinks,bits.ReadMessageHistory].every(bit=>p.has(bit)),send:payload=>c.send(payload),findMessage:async(marker,messageId)=>{
+    const match=m=>m.author?.id===client.user.id&&m.embeds?.some(e=>e.footer?.text===marker);
+    if(messageId){const m=await c.messages.fetch(messageId);return match(m)?m.id:null;}
+    const messages=await c.messages.fetch({limit:100});return messages.find(match)?.id||null;
+  }};
+}});
 const improvements=createShopImprovements({db,staff,access:serverAccess,resolveChannel:id=>client.channels.fetch(id)});
 const operations=createOperations({db,smscode,smsOrder,smsCancel,payments,
   sendDM:(id,body,meta)=>meta?improvements.send(meta.kind,meta.ref,id,()=>sendDiscordDM(id,body)):sendDiscordDM(id,body),language:id=>languages.get(id),staff});
@@ -391,11 +398,28 @@ async function startDiscord(){
   const handleOwnerProvider=createOwnerProviderHandler({discord:require("discord.js"),staff,commerce,smscode,smsCatalogProducts,otpPanel:handleOTPLifecycle.panel});
   const handleSMSWebhook=createSMSCodeWebhookHandler({staff});
   const handleOperations=createOperationsHandler({discord:require("discord.js"),ops:operations});
+  const handleReleaseInfo=require('./release-info').createReleaseInfoHandler({discord:require('discord.js'),model:releaseInfo,staff});
+  const handleWalletRecovery=require('./wallet-recovery').createWalletRecoveryHandler({discord:require('discord.js'),commerce,staff,fetchOrder:smsOrder});
   const handleServerAccess=createServerAccessHandler({discord:require("discord.js"),access:serverAccess,resolveChannel:id=>client.channels.fetch(id),resolveRole:async(guildId,roleId)=>(await client.guilds.fetch(guildId)).roles.fetch(roleId)});
   const handleDirect=createDirectHandler({discord:require("discord.js"),direct,payments,language:id=>languages.get(id),otpPanel:handleOTPLifecycle.panel});
   const handleStoreFeatures=createStoreFeatureHandler({discord:require("discord.js"),features:storeFeatures,staff});
   const handleDigiflazz=createDigiflazzHandler({discord:require("discord.js"),model:digiflazz,getBalance,staff});
   direct.setNotifier(async row=>{const user=await client.users.fetch(row.discord_id);await user.send(languages.translate(withHome(handleDirect.status(row),homeForUser(staff,row.discord_id)),row.discord_id,'delivery'));});
+  const handleChannelPicker=require('./channel-picker').createChannelPicker({
+    discord:require('discord.js'),staff,access:serverAccess,
+    listGuilds:async()=>[...client.guilds.cache.values()].map(g=>({id:g.id,name:g.name})),
+    listChannels:async(guildId,kind)=>{
+      const guild=await client.guilds.fetch(guildId),channels=await guild.channels.fetch(),bits=require('discord.js').PermissionFlagsBits;
+      return [...channels.values()].filter(Boolean).map(c=>{const p=c.permissionsFor(client.user),required=[bits.ViewChannel,bits.SendMessages];if(['release','orders','panel'].includes(kind))required.push(bits.EmbedLinks);if(kind==='release')required.push(bits.ReadMessageHistory);return {id:c.id,name:c.name,guildId:c.guildId,type:c.type,parentName:c.parent?.name,usable:!!p&&required.every(bit=>p.has(bit))};});
+    },
+    save:async(kind,user,guild,channel)=>{
+      if(kind==='release')await releaseInfo.configure(user,channel);
+      else if(kind==='info')await storeFeatures.configureInfo(user,guild,channel);
+      else if(kind==='orders')await orderChannel.configure(user,guild,channel);
+      else if(kind==='transactions')serverAccess.setChannel(guild,user,channel);
+      else if(kind==='panel')await improvements.publish(user,guild,channel,handleImprovements.panel());
+    }
+  });
   client.on("interactionCreate", async i=>{
     try {
       const id=i.user.id;
@@ -410,7 +434,10 @@ async function startDiscord(){
         if(i.customId===HOME_ID&&staff.isAdmin(i.user.id))return dispatchInteraction(handleAdmin,i);
         return i.reply({ephemeral:true,embeds:[shopEmbed()],components:mainRow()});
       }
+      if(await dispatchInteraction(handleChannelPicker,i))return;
       if(await dispatchInteraction(handleOTPLifecycle,i))return;
+      if(await dispatchInteraction(handleWalletRecovery,i))return;
+      if(await dispatchInteraction(handleReleaseInfo,i))return;
       if(await dispatchInteraction(handleBuyerGameCheck,i))return;
       if(await dispatchInteraction(handleUpgrades,i))return;
       if(i.customId==='admin_balance_save'&&!staff.isOwner(i.user.id)&&upgrades.settings().approvalThreshold>0&&Number(i.fields.getTextInputValue('amount'))>=upgrades.settings().approvalThreshold){await i.deferReply({ephemeral:true});const p=await upgrades.requestCredit(i);await i.editReply({content:'Pengajuan '+p.id+' menunggu owner di Dashboard Owner → Pengajuan Saldo. Saldo belum ditambahkan.',allowedMentions:{parse:[]}});return;}
@@ -534,6 +561,8 @@ async function startDiscord(){
   });
 
   await client.login(process.env.DISCORD_TOKEN);
+  const pollRelease=()=>releaseInfo.poll().catch(()=>console.error('Info Update belum terkirim. Periksa pengaturan channel.'));
+  const releasePoll=setInterval(pollRelease,60000);releasePoll.unref();pollRelease();
   if(digiflazz.configured())digiflazz.sync().then(n=>console.log('Katalog Digiflazz tersinkron:',n)).catch(e=>console.error('Sinkron Digiflazz gagal:',e.message));
   const digiflazzSyncMinutes=Math.max(5,Number(process.env.DIGIFLAZZ_SYNC_MINUTES)||15);
   const digiflazzSync=setInterval(()=>{if(digiflazz.configured())digiflazz.sync().catch(e=>console.error('Sinkron Digiflazz gagal:',e.message));},digiflazzSyncMinutes*60000);digiflazzSync.unref();
@@ -551,6 +580,6 @@ async function startDiscord(){
   const overduePoll=setInterval(()=>shopHealth.poll().catch(console.error),60000);overduePoll.unref();shopHealth.poll().catch(console.error);
   const manualProductPoll=setInterval(()=>manualProducts.poll().catch(console.error),30000);manualProductPoll.unref();manualProducts.poll().catch(console.error);
 }
-startDiscord();
+startDiscord().catch(()=>{console.error('Discord gagal dimulai. Bot berhenti agar hosting dapat menjalankan ulang.');client.destroy();db.close();process.exit(1);});
 
 app.listen(process.env.PORT||3000,()=>console.log(`Dashboard: http://localhost:${process.env.PORT||3000}`));
