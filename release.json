@@ -1,0 +1,9 @@
+{
+  "version": "2.4",
+  "changes": [
+    "Alur DOKU QRIS dilengkapi dengan pemeriksaan invoice khusus owner.",
+    "Status invoice dan tombol pembayaran tetap tersedia setelah pengecekan.",
+    "Callback pembayaran dikonfirmasi sebelum menunggu pengiriman produk.",
+    "Perbaikan status kedaluwarsa, refund, dan pemanggilan API bersamaan."
+  ]
+}

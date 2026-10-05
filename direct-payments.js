@@ -42,14 +42,16 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
       refund(row,'Produk habis/nonaktif atau harga provider berubah. Pembayaran dikembalikan ke saldo bot.');
     } else {
       try {
-        const result=await smsCreateOrder(row.product_id);const order=result.data?.orders?.[0];
-        if(!order?.id)throw new Error('Order provider belum terkonfirmasi.');
+        const result=await smsCreateOrder(row.product_id,{idempotencyKey:row.invoice_id});const order=result.data?.orders?.[0];
+        if(!order?.id || !/^\d+$/.test(String(order.id)) || !Number.isSafeInteger(Number(order.id)) || Number(order.id)<=0)throw new Error('Order provider belum terkonfirmasi.');
         db.prepare('UPDATE direct_purchases SET provider_order_id=? WHERE invoice_id=?').run(String(order.id),row.invoice_id);
+        if(db.prepare('SELECT id FROM orders WHERE provider_order_id=?').get(String(order.id)))throw Error('ID order provider sudah tercatat; jangan membatalkan order transaksi sebelumnya.');
         const cost=Number(order.amount?.canonical_amount ?? order.amount);
         if(cost!==row.provider_amount) {
           await smsCancel(order.id);refund(row,'Harga provider berubah. Order dibatalkan dan pembayaran dikembalikan ke saldo bot.');
         } else {
           db.transaction(()=>{
+            if(db.prepare('SELECT id FROM orders WHERE provider_order_id=?').get(String(order.id)))throw Error('ID order provider duplikat.');
             db.prepare('INSERT INTO orders(discord_id,product_id,provider_order_id,phone,amount,provider_amount,status) VALUES(?,?,?,?,?,?,?)').run(row.discord_id,row.product_id,String(order.id),order.phone_number,row.amount,cost,order.status || 'ACTIVE');
             db.prepare('UPDATE orders SET voucher_code=?,discount_amount=?,original_amount=?,platform_id=?,country_id=?,operator_id=?,product_name=? WHERE provider_order_id=? AND discord_id=?').run(row.voucher_code || null,row.discount_amount || 0,row.original_amount ?? row.amount,row.platform_id,row.country_id,row.operator_id,row.name,String(order.id),row.discord_id);
             db.prepare("UPDATE direct_purchases SET state='fulfilled',error=NULL WHERE invoice_id=? AND state='processing'").run(row.invoice_id);
@@ -66,10 +68,11 @@ function createDirectPayments({db,payments,commerce,smsCatalogProducts,smsCreate
     if(!payments.configured)throw new Error('QRIS belum aktif. Admin perlu mengisi konfigurasi pembayaran.');
     const previous=db.prepare('SELECT * FROM direct_purchases WHERE quote_token=? AND discord_id=?').get(token,userId);
     if(previous)return {purchase:previous,payment:payments.get(previous.invoice_id,userId)};
+    if(payments.available&&!payments.available())throw Error('QRIS belum tersedia untuk tagihan baru. Hubungi owner.');
     payments.assertCanCreate?.(userId);
     const q=commerce.checkout(userId,token);
     checkPurchase('otp',userId,q.amount);
-    require('./payments').parseCustomerEmail(customer.email);
+    const email=require('./payments').parseCustomerEmail(customer.email);if(payments.gateway==='doku'&&email.length>128)throw Error('Email tagihan DOKU maksimal 128 karakter.');
     if(q.amount<1000 || q.amount>1000000)throw new Error('Harga produk di luar batas QRIS 1.000–1.000.000 IDR. Gunakan saldo bot untuk harga di bawah 1.000 IDR.');
     const invoiceId='maboyy-buy-'+randomUUID();
     db.transaction(()=>{
@@ -140,14 +143,14 @@ function createDirectHandler({discord,direct,payments,language=()=>'id',otpPanel
         }
         await i.editReply(response);
       }else {
-        const {purchase,payment}=await direct.create(i.user.id,id.slice(13),{email:i.fields.getTextInputValue('email'),name:i.user.username});
+        const {purchase,payment}=await direct.create(i.user.id,id.slice(13),{email:i.fields.getTextInputValue('email'),name:i.user.username,language:language(i.user.id)});
         if(purchase.state!=='pending'){await i.editReply(status(purchase));return true;}
         if(!payment?.qr_url && !payment?.checkout_url)throw new Error('QR belum tersedia. Hubungi admin untuk memeriksa riwayat tagihan.');
         const result={embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('💳 Bayar Langsung QRIS')
           .setDescription(t(i.user.id,`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya QRIS pembeli: **${money(payment.fee_customer || 0)}**\nTotal bayar: **${money(payment.total_charge)}**\n${payment.production?'Pindai QRIS untuk membayar.':'MODE UJI — gunakan simulator '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+'.'}\nPesanan dibuat otomatis setelah pembayaran terkonfirmasi. Stok diperiksa setelah pembayaran; jika habis, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. Lihat hasil di tombol Cek Pembayaran; OTP dikirim melalui DM saat masuk.`,`Product: **${purchase.name}**\nProduct price: **${money(purchase.amount)}**\nCustomer QRIS fee: **${money(payment.fee_customer || 0)}**\nTotal to pay: **${money(payment.total_charge)}**\n${payment.production?'Scan the QRIS code to pay.':'TEST MODE — use the '+(payment.gateway==='midtrans'?'Midtrans':'TriPay')+' simulator.'}\nThe order is created after payment verification. Stock is checked after payment; if unavailable, the product price is refunded to your bot balance. QRIS fees are not refunded automatically. Use Check Payment to view the result; incoming OTPs are sent by DM.`))
           .setFooter({text:purchase.invoice_id})],components:[checkRow(purchase.invoice_id)]};
         if(payment.qr_url)result.embeds[0].setImage(payment.qr_url);
-        if(payment.checkout_url){result.embeds[0].setDescription(`Produk: **${purchase.name}**\nTotal bayar: **${money(payment.total_charge)}**\n${require('./doku').paymentInstruction(payment,language(i.user.id)==='en')}\nPesanan diproses otomatis setelah pembayaran terverifikasi.`);result.components[0].addComponents(require('./doku').paymentButton(payment,discord));}
+        if(payment.checkout_url){const en=language(i.user.id)==='en';result.embeds[0].setDescription(t(i.user.id,`Produk: **${purchase.name}**\nHarga produk: **${money(purchase.amount)}**\nBiaya pembeli: **${money(payment.fee_customer||0)}**\nTotal bayar: **${money(payment.total_charge)}**`,`Product: **${purchase.name}**\nProduct price: **${money(purchase.amount)}**\nCustomer fee: **${money(payment.fee_customer||0)}**\nTotal: **${money(payment.total_charge)}**`)+`\n${require('./doku').paymentInstruction(payment,en)}\n`+t(i.user.id,'Pesanan diproses setelah pembayaran terverifikasi. Jika stok habis atau harga berubah, harga produk dikembalikan ke saldo bot. Biaya QRIS tidak dikembalikan otomatis. OTP dikirim melalui DM.','Orders are processed after payment verification. If stock runs out or the price changes, the product price is refunded to your bot balance. QRIS fees are not refunded automatically. OTPs are delivered by DM.'));result.components[0].addComponents(require('./doku').paymentButton(payment,discord));}
         await i.editReply(result);
       }
     }catch(e){await i.editReply({content:errorText(e,language(i.user.id)==='en'),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('active_invoice').setLabel('Tagihan Aktif').setStyle(ButtonStyle.Secondary))]});}
