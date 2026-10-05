@@ -1,17 +1,44 @@
 const {buyerLabel,rememberBuyer,hydrateBuyers}=require('./buyer-profiles');
 const {createManualBalance}=require('./admin');
+const {createHash}=require('node:crypto');
 const REFUND_GUIDE='**Pembatalan & refund**\n• Pesanan dapat dibatalkan selama belum menerima OTP dan pembatalan diterima provider.\n• Setelah OTP diterima atau pesanan selesai, pembatalan tidak tersedia.\n• Refund harga produk masuk ke **saldo bot**, termasuk pembelian langsung QRIS; bukan ke rekening/e-wallet. Biaya QRIS tidak termasuk refund.\n• Pembayaran yang hasil pesanan providernya belum jelas diperiksa admin. Jangan membayar ulang.\n• Nomor virtual tidak menjamin aplikasi menerima nomor tersebut. Simpan ID pesanan saat meminta bantuan.';
 
 function proofIdentity(value){
   let u;try{u=new URL(String(value).trim());}catch{throw new Error('Bukti harus berupa tautan HTTPS gambar bukti pembayaran.');}
   if(u.protocol!=='https:' || u.username || u.password || !['cdn.discordapp.com','media.discordapp.net'].includes(u.hostname) || !u.pathname.startsWith('/attachments/') || !/\.(png|jpe?g|webp)$/i.test(u.pathname))throw new Error('Upload gambar bukti ke Discord, lalu salin tautan gambar (PNG/JPG/WebP).');
-  return {url:u.href,key:u.pathname};
+  return {url:u.href,key:u.pathname,ext:(u.pathname.match(/\.(png|jpe?g|webp)$/i)||[])[1]?.toLowerCase()};
 }
-function createStoreFeatures({db,staff,sendDM,resolveInfoChannel,now=()=>Date.now()}){
+function imageKind(buf){
+  if(buf.length>=8 && buf.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])))return 'png';
+  if(buf.length>=3 && buf[0]===0xff && buf[1]===0xd8 && buf[2]===0xff)return 'jpg';
+  if(buf.length>=12 && buf.subarray(0,4).toString('ascii')==='RIFF' && buf.subarray(8,12).toString('ascii')==='WEBP')return 'webp';
+  return null;
+}
+async function scanProofImage(value,{fetchImpl=fetch,maxBytes=8*1024*1024}={}){
+  const evidence=proofIdentity(value);
+  let response;
+  try{response=await fetchImpl(evidence.url,{method:'GET',headers:{Accept:'image/png,image/jpeg,image/webp'},redirect:'error',signal:AbortSignal.timeout(10000)});}catch{throw new Error('Gambar bukti tidak dapat diperiksa. Pastikan tautan Discord masih aktif lalu coba lagi.');}
+  if(!response?.ok)throw new Error('Gambar bukti tidak dapat diakses. Upload ulang gambar ke Discord lalu kirim tautan baru.');
+  const type=String(response.headers?.get?.('content-type')||'').split(';')[0].trim().toLowerCase();
+  if(!['image/png','image/jpeg','image/webp'].includes(type))throw new Error('File bukti bukan gambar PNG/JPG/WebP yang valid.');
+  const declared=Number(response.headers?.get?.('content-length'));
+  if(Number.isFinite(declared)&&declared>maxBytes)throw new Error('Ukuran gambar bukti maksimal 8 MB.');
+  const chunks=[];let total=0;
+  if(response.body?.getReader){const reader=response.body.getReader();for(;;){const {done,value}=await reader.read();if(done)break;total+=value.byteLength;if(total>maxBytes){try{await reader.cancel();}catch{}throw new Error('Ukuran gambar bukti maksimal 8 MB.');}chunks.push(Buffer.from(value));}}
+  else {const data=Buffer.from(await response.arrayBuffer());total=data.length;if(total>maxBytes)throw new Error('Ukuran gambar bukti maksimal 8 MB.');chunks.push(data);}
+  if(total<16)throw new Error('File bukti terlalu kecil atau rusak. Upload ulang gambar asli.');
+  const data=Buffer.concat(chunks,total),kind=imageKind(data),ext=evidence.ext==='jpeg'?'jpg':evidence.ext;
+  if(!kind || kind!==ext || (kind==='png'&&type!=='image/png') || (kind==='jpg'&&type!=='image/jpeg') || (kind==='webp'&&type!=='image/webp'))throw new Error('Format isi gambar bukti tidak sesuai dengan nama file. Upload ulang gambar asli.');
+  return {...evidence,hash:createHash('sha256').update(data).digest('hex'),bytes:total,mime:type};
+}
+function createStoreFeatures({db,staff,sendDM,resolveInfoChannel,fetchImpl=fetch,now=()=>Date.now()}){
   db.exec(`CREATE TABLE IF NOT EXISTS store_feature_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS store_feature_audit(id INTEGER PRIMARY KEY,admin_id TEXT NOT NULL,action TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS manual_topup_requests(id TEXT PRIMARY KEY,discord_id TEXT NOT NULL,amount INTEGER NOT NULL,proof_url TEXT NOT NULL,proof_key TEXT UNIQUE NOT NULL,note TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',admin_id TEXT,decision_note TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,decided_at TEXT,result_notified INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS manual_topup_notifications(request_id TEXT NOT NULL,admin_id TEXT NOT NULL,PRIMARY KEY(request_id,admin_id));`);
+  const requestColumns=new Set(db.prepare('PRAGMA table_info(manual_topup_requests)').all().map(c=>c.name));
+  if(!requestColumns.has('proof_hash'))db.exec('ALTER TABLE manual_topup_requests ADD COLUMN proof_hash TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS manual_topup_proof_hash ON manual_topup_requests(proof_hash) WHERE proof_hash IS NOT NULL');
   db.exec(`CREATE TABLE IF NOT EXISTS store_info_channel(id INTEGER PRIMARY KEY CHECK(id=1),guild_id TEXT NOT NULL,channel_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS store_info_posts(id TEXT PRIMARY KEY,admin_id TEXT NOT NULL,kind TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,state TEXT NOT NULL,created_ms INTEGER NOT NULL,attempt_ms INTEGER NOT NULL DEFAULT 0,message_id TEXT);`);
   const credit=createManualBalance(db);
@@ -43,15 +70,18 @@ function createStoreFeatures({db,staff,sendDM,resolveInfoChannel,now=()=>Date.no
     db.prepare('UPDATE store_info_posts SET attempt_ms=? WHERE id=?').run(now(),r.id);
     try{const c=await infoChannel(config.guild_id,config.channel_id);const current=infoSetting();if(!current?.enabled||current.channel_id!==config.channel_id||current.guild_id!==config.guild_id)return;if(r.kind==='announcement'&&!staff.isAdmin(r.admin_id)){db.prepare("UPDATE store_info_posts SET state='cancelled' WHERE id=?").run(r.id);continue;}const msg=await c.send({content:r.title+'\n\n'+r.body,allowedMentions:{parse:[]}});db.prepare("UPDATE store_info_posts SET state='sent',message_id=? WHERE id=? AND state='queued'").run(msg?.id||null,r.id);}catch{}
   }}finally{infoBusy=false;}}
-  function submit({id,userId,amount,proof,note=''}){
+  async function scanProof(proof){return scanProofImage(proof,{fetchImpl});}
+  function submit({id,userId,amount,proof,proofHash=null,note=''}){
     if(!/^\d{17,20}$/.test(userId) || !/^\d{17,20}$/.test(id) || !Number.isSafeInteger(amount) || amount<5000 || amount>1000000 || note.length>200)throw new Error('Nominal harus 5.000–1.000.000 IDR; catatan maksimal 200 karakter.');
-    const evidence=proofIdentity(proof);
+    const evidence=proofIdentity(proof);proofHash=proofHash==null?null:String(proofHash).toLowerCase();
+    if(proofHash!==null&&!/^[a-f0-9]{64}$/.test(proofHash))throw new Error('Hasil pemeriksaan bukti tidak valid. Upload ulang gambar.');
     return db.transaction(()=>{
       const previous=db.prepare('SELECT * FROM manual_topup_requests WHERE id=?').get(id);
-      if(previous){if(previous.discord_id!==userId || previous.amount!==amount || previous.proof_key!==evidence.key || previous.note!==note)throw new Error('Pengajuan tidak sesuai.');return previous;}
+      if(previous){if(previous.discord_id!==userId || previous.amount!==amount || previous.proof_key!==evidence.key || previous.note!==note || (proofHash&&previous.proof_hash&&previous.proof_hash!==proofHash))throw new Error('Pengajuan tidak sesuai.');return previous;}
       if(db.prepare('SELECT id FROM manual_topup_requests WHERE proof_key=?').get(evidence.key))throw new Error('Bukti ini sudah pernah diajukan. Periksa status pengajuan sebelumnya.');
+      if(proofHash&&db.prepare('SELECT id FROM manual_topup_requests WHERE proof_hash=?').get(proofHash))throw new Error('Isi gambar bukti ini sudah pernah diajukan. Periksa status pengajuan sebelumnya.');
       if(db.prepare("SELECT COUNT(*) n FROM manual_topup_requests WHERE discord_id=? AND status='pending'").get(userId).n>=3)throw new Error('Masih ada 3 pengajuan menunggu. Tunggu pemeriksaan admin.');
-      db.prepare('INSERT INTO manual_topup_requests(id,discord_id,amount,proof_url,proof_key,note) VALUES(?,?,?,?,?,?)').run(id,userId,amount,evidence.url,evidence.key,note);
+      db.prepare('INSERT INTO manual_topup_requests(id,discord_id,amount,proof_url,proof_key,proof_hash,note) VALUES(?,?,?,?,?,?,?)').run(id,userId,amount,evidence.url,evidence.key,proofHash,note);
       return db.prepare('SELECT * FROM manual_topup_requests WHERE id=?').get(id);
     })();
   }
@@ -76,7 +106,7 @@ function createStoreFeatures({db,staff,sendDM,resolveInfoChannel,now=()=>Date.no
     }
     for(const r of db.prepare("SELECT * FROM manual_topup_requests WHERE status<>'pending' AND result_notified=0 LIMIT 20").all())try{await sendDM(r.discord_id,`Pembeli: ${buyerLabel(r.discord_id)}\nPengajuan saldo ${r.id}: ${r.status==='approved'?'DISETUJUI — '+r.amount.toLocaleString('id-ID')+' IDR masuk ke saldo':'DITOLAK'}\nCatatan admin: ${r.decision_note}\nCek Isi Saldo → Manual → Status Pengajuan.`);db.prepare('UPDATE manual_topup_requests SET result_notified=1 WHERE id=?').run(r.id);}catch{}
   }finally{polling=false;}}
-  return {infoStatus,configureInfo,toggleInfo,draftInfo,confirmInfo,testInfo,pollInfo,maintenance,assertOpen,setMaintenance,submit,get,requests,decide,repeat,poll};
+  return {infoStatus,configureInfo,toggleInfo,draftInfo,confirmInfo,testInfo,pollInfo,maintenance,assertOpen,setMaintenance,scanProof,submit,get,requests,decide,repeat,poll};
 }
 
 function createStoreFeatureHandler({discord,features,staff}){
@@ -119,8 +149,9 @@ function createStoreFeatureHandler({discord,features,staff}){
       if(id==='shop_refund_guide'){await i.editReply({content:REFUND_GUIDE});return true;}
       if(id==='manual_request_submit'){
         const raw=i.fields.getTextInputValue('amount').trim();if(!/^\d+$/.test(raw))throw new Error('Nominal harus angka rupiah tanpa titik.');
-        const r=features.submit({id:i.id,userId:i.user.id,amount:Number(raw),proof:i.fields.getTextInputValue('proof'),note:i.fields.getTextInputValue('note').trim()});
-        await i.editReply({content:`✅ Pengajuan ${r.id} tersimpan. Nominal: ${money(r.amount)}. Saldo masuk setelah admin mencocokkan pembayaran dan menyetujui.`,components:[row([['manual_request_list:0','Status Pengajuan']])]});features.poll().catch(()=>{});return true;
+        const proof=i.fields.getTextInputValue('proof'),scan=await features.scanProof(proof);
+        const r=features.submit({id:i.id,userId:i.user.id,amount:Number(raw),proof,proofHash:scan.hash,note:i.fields.getTextInputValue('note').trim()});
+        await i.editReply({content:`✅ Pengajuan ${r.id} tersimpan. Nominal: ${money(r.amount)}. Gambar bukti lolos pemeriksaan file dan duplikasi. Saldo tetap hanya masuk setelah admin mencocokkan mutasi pembayaran dan menyetujui.`,components:[row([['manual_request_list:0','Status Pengajuan']])]});features.poll().catch(()=>{});return true;
       }
       if(id.startsWith('manual_request_list:') || id.startsWith('admin_store_requests:')){
         const r=features.requests(i.user.id,Number(id.split(':')[1]),admin?i.user.id:undefined),components=[];
@@ -132,7 +163,7 @@ function createStoreFeatureHandler({discord,features,staff}){
       if(id.startsWith('manual_request_detail:') || id.startsWith('admin_store_detail:')){
         const r=features.get(id.split(':')[1],i.user.id,admin?i.user.id:undefined);
         await hydrateBuyers([r.discord_id]);
-        await i.editReply({content:`Pengajuan: ${r.id}\nPembeli: ${buyerLabel(r.discord_id)}\nNominal: ${money(r.amount)}\nStatus: ${r.status}\nCatatan: ${r.note || '-'}\nBukti: ${r.proof_url}\nCatatan admin: ${r.decision_note || '-'}${admin?'\n\nPeriksa mutasi rekening/e-wallet, pengirim dan nominal. Gambar bukti saja tidak cukup untuk persetujuan.':''}`,allowedMentions:{parse:[]},components:[row(admin && r.status==='pending'?[[`admin_store_approve:${r.id}`,'Setujui'],[`admin_store_reject:${r.id}`,'Tolak'],['admin_store_requests:0','Kembali']]:[[admin?'admin_store_requests:0':'manual_request_list:0','Kembali']])]});return true;
+        await i.editReply({content:`Pengajuan: ${r.id}\nPembeli: ${buyerLabel(r.discord_id)}\nNominal: ${money(r.amount)}\nStatus: ${r.status}\nCatatan: ${r.note || '-'}\nBukti: ${r.proof_url}\nPemeriksaan file: ${r.proof_hash?'Lolos • hash tersimpan':'Belum dipindai (pengajuan lama)'}\nCatatan admin: ${r.decision_note || '-'}${admin?'\n\nPeriksa mutasi rekening/e-wallet, pengirim dan nominal. Gambar bukti saja tidak cukup untuk persetujuan.':''}`,allowedMentions:{parse:[]},components:[row(admin && r.status==='pending'?[[`admin_store_approve:${r.id}`,'Setujui'],[`admin_store_reject:${r.id}`,'Tolak'],['admin_store_requests:0','Kembali']]:[[admin?'admin_store_requests:0':'manual_request_list:0','Kembali']])]});return true;
       }
       if(/^admin_store_save(approve|reject):/.test(id)){
         const approve=id.startsWith('admin_store_saveapprove:');const r=features.decide({id:id.split(':')[1],adminId:i.user.id,approve,note:i.fields.getTextInputValue('note'),confirmation:approve?i.fields.getTextInputValue('confirmation'):''});
@@ -149,4 +180,4 @@ function createStoreFeatureHandler({discord,features,staff}){
     }catch(e){const p={content:e.message,allowedMentions:{parse:[]}};if(i.deferred || i.replied)await i.editReply(p);else await i.reply({ephemeral:true,...p});return true;}
   };
 }
-module.exports={REFUND_GUIDE,proofIdentity,createStoreFeatures,createStoreFeatureHandler};
+module.exports={REFUND_GUIDE,proofIdentity,scanProofImage,imageKind,createStoreFeatures,createStoreFeatureHandler};
